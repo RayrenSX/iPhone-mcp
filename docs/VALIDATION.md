@@ -5,6 +5,21 @@
 
 ## 已确认的结果
 
+### 新用户安装入口补充验证
+
+`scripts/bootstrap.ps1` 已补齐 Python 检测/winget 安装路径及设备运行时下载入口。
+实际执行 `install-runtime.ps1` 下载官方 `v1.8.5-pre2` ZIP、按官方 Release 清单验证
+SHA256 并完整解压；重复执行复用已下载版本。该 ZIP 的 SHA256 为
+`fc43a251e479bbd68a0409a019ca0868ec0e832de936861e80ca5193c0cbff01`。
+随后正常退出本地构建，从解压出的官方包启动，自动启用 API。
+未开启投屏时诊断报告 ready=false；点击开始投屏后截图/OCR 成功，尺寸 1082×2340；
+在主程序开启有线控制并处理继续提示后，controlReady=true。
+另执行 bootstrap 复用既有主程序的配置路径，依赖安装与真实诊断均通过。
+
+本机已有 Python、USB 驱动、手机信任/开发者模式及 DDI；**未在空白虚拟机验证
+winget 首装 Python、驱动首装或手机首次配对**。不把下载/运行验证描述为完全无人值守安装。
+发布版本选择、重复/缺失清单条目和损坏下载拒绝由 PowerShell 测试覆盖。
+
 本次 GitHub 发布前还实际执行了 `scripts/setup.ps1 -EnableAutomationApi`：
 Windows PowerShell 5.1 通过主程序 UI 启用 API、安装包、检查依赖、更新 Codex 注册，
 随后 stdio 诊断枚举 22 个工具，第一台设备截图 1082×2340、中文 OCR 和反控可用检查通过。

@@ -15,18 +15,23 @@ MCP 适配器发展而来，复用 iPhoneMirror 本地 Automation API，不另�
 > 自动检测依赖与 iPhoneMirror、执行配置、接入 MCP，并实际调用工具验证截图。
 > 完成所有电脑端步骤；若需要手机连接、信任或解锁，再告诉我具体动作。
 
-已有 Python、Codex CLI 和运行中的 iPhoneMirror 时：
+全新 Windows x64 环境，在已安装 Codex CLI 的情况下：
 
 ```powershell
 git clone https://github.com/RayrenSX/iPhone-mcp.git
 cd iPhone-mcp
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1 -EnableAutomationApi
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap.ps1 -OpenDriverManager
 ```
 
-脚本自动创建虚拟环境、安装依赖、通过主程序 UI 启用本地 API、注册 Codex MCP，
-并执行真实 stdio 握手/截图/OCR 诊断。密钥留在当前用户 DPAPI，不写入 Codex 配置。
+脚本检测 Python，缺失时通过 winget 安装；没有运行中的 iPhoneMirror 时，自动下载并
+校验支持 Automation API 的 `v1.8.5-pre2` 官方便携包、启动主程序。
+随后安装 MCP 依赖、启用 API、注册 Codex，执行真实 stdio 握手/截图/OCR 诊断。
+首次使用还需在打开的驱动管理器中点“一键安装全部驱动”，手机信任电脑，
+在主程序开始投屏并开启有线控制。完成后重跑诊断。
+密钥留在当前用户 DPAPI，不写入 Codex 配置。
 详细参数、主程序获取和排错见 [自动配置指南](docs/SETUP.md)。
-手机物理连接、信任、解锁和权限提示可能需要人操作；主程序需支持 Automation API。
+手机连接、信任、解锁、开发者模式重启及 Windows 管理员确认仍可能需要人操作。
+已有主程序可继续使用 `scripts/setup.ps1 -EnableAutomationApi`。
 
 ## 环境
 
