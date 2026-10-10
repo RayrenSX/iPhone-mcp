@@ -20,14 +20,17 @@ MCP 适配器发展而来，复用 iPhoneMirror 本地 Automation API，不另�
 ```powershell
 git clone https://github.com/RayrenSX/iPhone-mcp.git
 cd iPhone-mcp
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap.ps1 -OpenDriverManager
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap.ps1
 ```
 
 脚本检测 Python，缺失时通过 winget 安装；没有运行中的兼容 iPhoneMirror 时，自动下载并
 校验本仓库 `runtime-v0.2.0` 后台运行包。随后安装 MCP 依赖、注册 Codex，
 通过 MCP 启动隐藏主窗口的应用、启用 API、准备投屏和反控，执行真实截图/OCR 诊断。
-首次使用还需在打开的驱动管理器中点“一键安装全部驱动”，手机信任电脑，
-完成开发者模式及配对后，再调用 `start_iphonemirror`。已有正常设备无需重新安装驱动。
+驱动安装改为命令行，AI 根据 `actionRequired` 提示连接、拔插 USB、解锁和管理员确认。
+健康驱动直接跳过；缺失或异常组件由原生安装器诊断、安装或修复。完成后调用
+`start_iphonemirror` 和 `snapshot` 验证。此流程需要包含 `driverSetupVersion: 1`
+的新版原生驱动程序；公开 runtime-v0.2.0 尚不含该入口，须使用本地构建候选包，
+见 [原生构建说明](runtime-patches/README.md)。旧包会返回升级要求，不打开 GUI。
 密钥留在当前用户 DPAPI，不写入 Codex 配置。
 详细参数、主程序获取和排错见 [自动配置指南](docs/SETUP.md)。
 手机连接、信任、解锁、开发者模式重启及 Windows 管理员确认仍可能需要人操作。
@@ -77,7 +80,7 @@ codex mcp get iphone-mcp
 本机 Codex CLI 的只读测试可以截图、查询，控制工具因权限策略被拒绝；
 Full access 测试成功完成获取控制、点击、再次截图与释放。不需要在项目中保存模型 API 密钥。
 
-## 25 个工具
+## 26 个工具
 
 | 类别 | 工具 |
 |---|---|
@@ -87,7 +90,7 @@ Full access 测试成功完成获取控制、点击、再次截图与释放。�
 | 控制租约 | `acquire_control`, `release_control` |
 | 触控 | `tap`, `long_press`, `swipe`, `touch_path`, `touch_down`, `touch_up` |
 | 类似桌面操作 | `click_element`, `scroll`, `drag`, `type_at` |
-| 输入与剪贴板 | `press_key`, `type_text`, `read_clipboard`, `write_clipboard` |
+| 输入与剪贴板 | `press_key`, `press_shortcut`, `type_text`, `read_clipboard`, `write_clipboard` |
 | 等待 | `wait`, `wait_for` |
 
 推荐流程：`start_iphonemirror` → `list_devices` → `snapshot` → 检查能力/画面 → `acquire_control`
@@ -116,6 +119,16 @@ MCP 握手和工具枚举不要求应用已打开或密钥已存在。调用 `st
 正常关闭服务会尝试释放；强制终止则由应用端 TTL 回收。用户可从主程序收回控制。
 `dispatched` 只证明传输已发送；超时不自动重试输入。
 长按/滑动/轨迹时长为 0.05–10 秒，持有触点最多 10 秒。
+
+`press_shortcut(device_id, shortcut)` 接入 iPhoneMirror 的手机系统快捷动作：
+`home`（主屏幕）、`app_switcher`（App 切换器）、`control_center`（控制中心）、
+`notification_center`（通知中心）、`dock`、`siri`、`volume_up`、`volume_down`、`lock_screen`。
+需要控制租约和 `keyboard.input` 权限；先检查 `status.capabilities.shortcuts`。
+它通过指定设备的原生路由执行，不修改电脑快捷键设置，也不依赖窗口焦点。
+`home` 是手机主屏幕动作，`press_key(HOME)` 仍是键盘 Home。
+锁屏可能中断截图；返回 `dispatched` 后仍需观察实际效果。
+原始 `runtime-v0.2.0` 没有这个 API，需要应用
+[快捷动作运行时补丁](runtime-patches/README.md#phone-system-shortcuts)。
 
 文字操作会使用手机剪贴板；iOS 可能弹出“允许粘贴”，处理完成前不要更改剪贴板或发送后续按键。
 测试证据已捕获这个提示，并在允许后确认文本出现。截图和剪贴板会交给所用 AI 客户端。

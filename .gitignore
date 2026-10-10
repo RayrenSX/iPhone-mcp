@@ -6,3 +6,5 @@ __pycache__/
 artifacts/
 dist/
 *.egg-info/
+tests/native-shortcuts/bin/
+tests/native-shortcuts/obj/

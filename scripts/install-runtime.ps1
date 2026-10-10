@@ -24,24 +24,25 @@ if (Test-Path -LiteralPath $receiptPath) {
     }
 }
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
-$downloadArgs = @{ UseBasicParsing = $true; TimeoutSec = 900 }
-if ($Proxy) { $downloadArgs.Proxy = $Proxy }
+function Get-RuntimeFile([string]$Uri, [string]$OutputPath) {
+    $curl = Get-Command curl.exe -ErrorAction Stop
+    $common = @('--fail', '--location', '--silent', '--show-error', '--connect-timeout', '15', '--max-time', '900', '--speed-limit', '1024', '--speed-time', '60', '--output', $OutputPath)
+    & $curl.Source @common --noproxy '*' $Uri
+    if ($LASTEXITCODE -eq 0) { return }
+    if (-not $Proxy) { throw 'Direct runtime download failed. Supply -Proxy for fallback if needed.' }
+    Write-Host 'Direct download failed; retrying through the supplied proxy.'
+    & $curl.Source @common --proxy $Proxy --noproxy '' $Uri
+    if ($LASTEXITCODE -ne 0) { throw 'Runtime download failed through both direct and proxy routes.' }
+}
 Write-Host "Downloading iPhone-mcp background runtime $releaseTag; no drivers are changed."
-$manifest = (Invoke-WebRequest @downloadArgs -Uri "$releaseUrl/SHA256SUMS.txt").Content
-if ($manifest -is [byte[]]) { $manifest = [Text.Encoding]::UTF8.GetString($manifest) }
+$manifestPath = Join-Path $destination ('manifest-' + [guid]::NewGuid().ToString('N') + '.txt')
+Get-RuntimeFile "$releaseUrl/SHA256SUMS.txt" $manifestPath
+$manifest = Get-Content -LiteralPath $manifestPath -Raw
 $expected = Get-ReleaseChecksum "$manifest" $assetName
 $archivePath = Join-Path $destination $assetName
 if (-not (Test-Path -LiteralPath $archivePath) -or (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash -ne $expected) {
     $temporaryPath = "$archivePath.download"
-    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
-    if ($curl) {
-        $curlArgs = @('--fail', '--location', '--silent', '--show-error', '--retry', '2', '--max-time', '900', '--output', $temporaryPath)
-        if ($Proxy) { $curlArgs += @('--proxy', $Proxy) }
-        & $curl.Source @curlArgs "$releaseUrl/$assetName"
-        if ($LASTEXITCODE -ne 0) { throw 'Official runtime download failed. Rerun with -Proxy if needed.' }
-    } else {
-        Invoke-WebRequest @downloadArgs -Uri "$releaseUrl/$assetName" -OutFile $temporaryPath
-    }
+    Get-RuntimeFile "$releaseUrl/$assetName" $temporaryPath
     Test-ReleaseChecksum $temporaryPath $expected | Out-Null
     Move-Item -LiteralPath $temporaryPath -Destination $archivePath -Force
 }

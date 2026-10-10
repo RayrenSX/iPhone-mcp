@@ -28,6 +28,9 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.requests = []
         requests = self.requests
+        self.capabilities = {"shortcuts": ["home", "app_switcher", "control_center", "notification_center",
+                                           "dock", "siri", "volume_up", "volume_down", "lock_screen"]}
+        capabilities = self.capabilities
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
@@ -42,7 +45,8 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
                 elif self.path == "/api/v1/devices":
                     payload = {"devices": [{"id": "usb:fixture", "online": True}]}
                 elif self.path.endswith("/status"):
-                    payload = {"online": True, "geometry": {"width": 1, "height": 1, "version": "frame-1"}}
+                    payload = {"online": True, "capabilities": capabilities,
+                               "geometry": {"width": 1, "height": 1, "version": "frame-1"}}
                 elif self.path.endswith("/screenshot"):
                     payload, kind = PNG, "image/png"
                 elif self.path.endswith("/control/acquire"):
@@ -91,11 +95,16 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
                     initialized = await session.initialize()
                     self.assertEqual(initialized.serverInfo.name, "iPhoneMirror")
                     tools = {t.name: t for t in (await session.list_tools()).tools}
-                    self.assertEqual(len(tools), 25)
+                    self.assertEqual(len(tools), 28)
+                    self.assertIn("prepare_iphone_environment", tools)
+                    self.assertTrue(tools["get_setup_status"].annotations.readOnlyHint)
                     self.assertIn("geometry_version", tools["tap"].inputSchema["required"])
                     self.assertNotIn("ctx", tools["tap"].inputSchema["properties"])
                     self.assertTrue(tools["screenshot"].annotations.readOnlyHint)
                     self.assertFalse(tools["tap"].annotations.idempotentHint)
+                    self.assertFalse(tools["press_shortcut"].annotations.idempotentHint)
+                    self.assertTrue(tools["press_shortcut"].annotations.destructiveHint)
+                    self.assertIn("lock_screen", tools["press_shortcut"].inputSchema["properties"]["shortcut"]["enum"])
                     devices = await session.call_tool("list_devices", {})
                     self.assertFalse(devices.isError)
                     self.assertIn("usb:fixture", str(devices.content))
@@ -111,9 +120,32 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
                     no_lease = await session.call_tool("tap", args)
                     self.assertTrue(no_lease.isError)
                     self.assertEqual(len(self.requests), before)
+                    no_shortcut_lease = await session.call_tool("press_shortcut", {**device, "shortcut": "home"})
+                    self.assertTrue(no_shortcut_lease.isError)
+                    self.assertEqual(self.requests[-1][1].split("/")[-1], "status")
                     lease = await session.call_tool("acquire_control", device)
                     self.assertFalse(lease.isError)
                     self.assertNotIn("a" * 64, str(lease))
+                    before = len(self.requests)
+                    shortcut = await session.call_tool("press_shortcut", {**device, "shortcut": "app_switcher"})
+                    self.assertFalse(shortcut.isError)
+                    self.assertEqual(len(self.requests), before + 2)
+                    self.assertTrue(self.requests[-1][1].endswith("/input/shortcut"))
+                    self.assertEqual(self.requests[-1][3], {"shortcut": "app_switcher"})
+                    before = len(self.requests)
+                    invalid = await session.call_tool("press_shortcut", {**device, "shortcut": "CTRL+H"})
+                    self.assertTrue(invalid.isError)
+                    self.assertEqual(len(self.requests), before)
+                    self.capabilities["shortcuts"] = []
+                    unsupported = await session.call_tool("press_shortcut", {**device, "shortcut": "home"})
+                    self.assertTrue(unsupported.isError)
+                    self.assertIn("CAPABILITY_NOT_SUPPORTED", str(unsupported.content))
+                    self.assertTrue(self.requests[-1][1].endswith("/status"))
+                    self.capabilities.clear()
+                    legacy = await session.call_tool("press_shortcut", {**device, "shortcut": "home"})
+                    self.assertTrue(legacy.isError)
+                    self.assertIn("RUNTIME_UPGRADE_REQUIRED", str(legacy.content))
+                    self.assertTrue(self.requests[-1][1].endswith("/status"))
                     tap = await session.call_tool("tap", args)
                     self.assertFalse(tap.isError)
                     self.assertEqual(self.requests[-1][3]["geometryVersion"], "frame-1")

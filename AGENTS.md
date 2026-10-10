@@ -11,14 +11,16 @@ When asked to install/configure this project, execute the steps; do not just des
    `winget install --exact --id Python.Python.3.13 --accept-package-agreements --accept-source-agreements`
    when installation is authorized; rediscover the executable after installation.
 2. For a fresh machine run
-   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap.ps1 -OpenDriverManager`.
+   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap.ps1`.
    Bootstrap installs missing Python using winget and downloads/checksums this repository's
    runtime-v0.2.0 background runtime if no app is running. Official older runtimes lack
    the management endpoints; don't use them for background startup.
    Bootstrap uses an existing compatible app; if that app lacks the runtime marker,
    close it normally and rerun. A `-MirrorPath <actual-exe>` overrides runtime discovery.
 3. Follow docs/SETUP.md to prepare USB drivers, Trust This Computer, capture and wired control.
-   The driver manager's one-click installer handles missing Apple USB support and filters.
+   Headless prepare_iphone_environment / scripts/setup-drivers.py handles missing Apple USB support and filters.
+   It requires driverSetupVersion=1; the original public runtime-v0.2.0 needs rebuilding.
+   Present structured actionRequired to the human; never open the driver-manager GUI.
    Human UAC and on-phone prompts cannot be completed by a headless agent. Don't reinstall
    drivers when an existing device already works. Setup creates .venv, installs this package,
    registers `iphone-mcp` in Codex, exports a credential-free client JSON, and runs diagnosis.

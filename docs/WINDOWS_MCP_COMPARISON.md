@@ -18,7 +18,7 @@
 | Type | `type_text`, `type_at` | 通过已有手机 pasteboard 粘贴；实测遇到 iOS 许可提示，允许后可见文本 |
 | Scroll | `scroll` | wheel 改为 touch swipe；真机触摸轨迹已验证，页面滚动距离不等价于 wheel 次数 |
 | Move | `drag`, `touch_path` | 连续触控路径已验证；不提供鼠标 hover，不保证长按后的 iOS 拖放会话 |
-| Shortcut | `press_key` 部分替代 | 单键已验证；现有 HTTP API 不支持同时按下的 modifier chord，不把依次按键冒充组合键 |
+| Shortcut | `press_key`, `press_shortcut` | 单键已验证；手机系统快捷动作经补丁接入，按租约调用指定设备原生路由；不接受任意 modifier chord |
 | Clipboard | `read_clipboard`, `write_clipboard` | 手机纯文本读写已验证，不操作 Windows 剪贴板；受 API scopes 限制 |
 | Wait | `wait` | 异步等待，限制 30 秒，不续租 |
 | WaitFor | `wait_for` | OCR 文本出现/消失、图像变化、连接能力；已实测文本和反控可用，没有 UIA 焦点/启用状态 |
@@ -47,6 +47,10 @@ Windows MCP 的滚动属于鼠标 wheel。本项目的滚动由一次滑动执�
 超出帧边界的端点直接拒绝，避免自动裁切产生与请求不符的操作。
 
 Windows MCP 的 modifier shortcuts 不能直接替换为多次单键。
-iPhoneMirror 底层虽有 HID 路由，本次只沿用公开 HTTP API 的单键契约。
+iPhoneMirror 手机系统动作已通过补充运行时的 `/input/shortcut` 接入，支持主屏幕、
+App 切换器、控制中心、通知中心、Dock、Siri、音量增减和锁屏。
+MCP、原生模拟路由和失败/取消释放已有测试；这些测试不代表每项动作的真机 UI 效果均已验证。
+它们沿用控制租约、每设备输入锁和键盘会话锁；有线 App 切换器复用两次 Home 脉冲，
+有线控制中心等动作保持 Globe consumer 报告和普通键盘 usage 重叠。
 后续若增加组合键，应在现有设备输入仲裁中增加原子 modifier+usage 请求、测试释放和取消，
 再在 MCP 层暴露；不应绕过主程序的独占控制租约。

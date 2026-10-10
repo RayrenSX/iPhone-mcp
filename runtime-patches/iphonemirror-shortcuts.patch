@@ -1,0 +1,341 @@
+diff --git a/src/App.Runtime.Tests/AutomationApiTests.cs b/src/App.Runtime.Tests/AutomationApiTests.cs
+--- a/src/App.Runtime.Tests/AutomationApiTests.cs
++++ b/src/App.Runtime.Tests/AutomationApiTests.cs
+@@ -171,6 +171,7 @@
+         backend.HumanBusy = true;
+         await Error(await http.PostAsJsonAsync("/api/v1/devices/a/control/acquire", new { }), 409, "CONTROL_LOCKED");
+         backend.HumanBusy = false;
++        await Error(await http.PostAsJsonAsync("/api/v1/devices/a/input/shortcut", new { shortcut = "home" }), 409, "CONTROL_LOCKED");
+         var acquired = await Json(await http.PostAsJsonAsync("/api/v1/devices/a/control/acquire", new { }));
+         var session = acquired.GetProperty("sessionToken").GetString()!;
+         Expect(!owner.HumanAllowed("phone-a"), "UI admission remained open during API lease.");
+@@ -185,7 +186,7 @@
+             ("tap", new { x = 20, y = 30 }), ("long-press", new { x = 20, y = 30, duration = .05 }),
+             ("swipe", new { x1 = 20, y1 = 80, x2 = 20, y2 = 10, duration = .05 }),
+             ("touch-path", new { points = new[] { new { x = 10, y = 20 }, new { x = 20, y = 30 }, new { x = 30, y = 10 } }, duration = .05 }),
+-            ("key", new { key = "ENTER" }), ("text", new { text = "Hello 中文 😀" })
++            ("shortcut", new { shortcut = "home" }), ("key", new { key = "ENTER" }), ("text", new { text = "Hello 中文 😀" })
+         })
+         {
+             var response = await http.PostAsJsonAsync("/api/v1/devices/a/input/" + action, body);
+@@ -193,8 +194,12 @@
+         }
+         Expect(backend.Events.Count(x => x == "down") == backend.Events.Count(x => x == "up"), "Gestures left held contacts.");
+         Expect(backend.Events.Contains("move") && backend.Events.Contains("key:40"), "Existing routes were not used.");
++        Expect(backend.Events.Contains("button:64:down") && backend.Events.Contains("button:64:up"), "Shortcut did not use hardware route.");
++        await Error(await http.PostAsJsonAsync("/api/v1/devices/a/input/shortcut", new { shortcut = "invalid" }), 400, "INVALID_REQUEST");
++        await Error(await http.PostAsJsonAsync("/api/v1/devices/a/input/shortcut", new { }), 400, "INVALID_REQUEST");
+         var held = await Json(await http.PostAsJsonAsync("/api/v1/devices/a/input/touch-down", new { x = 10, y = 20 }));
+         await Error(await http.PostAsJsonAsync("/api/v1/devices/a/input/tap", new { x = 10, y = 20 }), 409, "CONTROL_LOCKED");
++        await Error(await http.PostAsJsonAsync("/api/v1/devices/a/input/shortcut", new { shortcut = "home" }), 409, "CONTROL_LOCKED");
+         Expect((await http.PostAsJsonAsync("/api/v1/devices/a/input/touch-up", new { touchId = held.GetProperty("touchId").GetString() })).StatusCode == HttpStatusCode.Accepted, "Touch release failed.");
+         await Error(await http.PostAsJsonAsync("/api/v1/devices/a/input/tap", new { x = 100, y = 20 }), 422, "INVALID_COORDINATE");
+         await Error(await http.PostAsJsonAsync("/api/v1/devices/a/input/long-press", new { x = 10, y = 20, duration = 0 }), 422, "INVALID_DURATION");
+@@ -213,7 +218,7 @@
+         await Error(await http.GetAsync("/api/v1/devices/a/clipboard"), 422, "CAPABILITY_NOT_SUPPORTED");
+         backend.Supported = true;
+         var spec = await Json(await http.GetAsync("/api/v1/openapi.json"));
+-        Expect(spec.GetProperty("openapi").GetString() == "3.1.0" && spec.GetProperty("paths").EnumerateObject().Count() == 15, "Incomplete OpenAPI document.");
++        Expect(spec.GetProperty("openapi").GetString() == "3.1.0" && spec.GetProperty("paths").EnumerateObject().Count() == 16, "Incomplete OpenAPI document.");
+         Expect((await http.GetStringAsync("/api/docs")).Contains("capture"), "Local docs missing.");
+         using (var crossOrigin = new HttpRequestMessage(HttpMethod.Get, "/api/v1/devices"))
+         { crossOrigin.Headers.Add("Origin", "https://example.org"); await Error(await http.SendAsync(crossOrigin), 403, "FORBIDDEN"); }
+@@ -224,6 +229,18 @@
+         Expect(release.IsSuccessStatusCode, "Release did not drain input.");
+         Expect(!(await longPress).IsSuccessStatusCode && owner.HumanAllowed("phone-a"), "Cancelled lease kept ownership or reported success.");
+         Expect(backend.Events.Count(x => x == "down") == backend.Events.Count(x => x == "up"), "Cancellation lost touch-up.");
++        var renewed = await Json(await http.PostAsJsonAsync("/api/v1/devices/a/control/acquire", new { }));
++        http.DefaultRequestHeaders.Remove("X-Control-Session");
++        http.DefaultRequestHeaders.Add("X-Control-Session", renewed.GetProperty("sessionToken").GetString()!);
++        var siri = http.PostAsJsonAsync("/api/v1/devices/a/input/shortcut", new { shortcut = "siri" });
++        for (var spin = 0; spin < 100 && !backend.Events.Contains("button:207:down"); spin++) await Task.Delay(10);
++        Expect(backend.Events.Contains("button:207:down"), "Siri did not start.");
++        Expect((await http.PostAsync("/api/v1/devices/a/control/release", null)).IsSuccessStatusCode, "Shortcut release failed.");
++        Expect(!(await siri).IsSuccessStatusCode && backend.Events.Contains("button:207:up"), "Shortcut cancellation lost release.");
++        await host.StopAsync();
++        settings.Permissions = ["device.read", "device.control"];
++        await host.StartAsync(settings, key);
++        await Error(await http.PostAsJsonAsync("/api/v1/devices/a/input/shortcut", new { shortcut = "home" }), 403, "FORBIDDEN");
+         await host.StopAsync();
+         settings.Permissions = ["device.read"];
+         await host.StartAsync(settings, key);
+@@ -487,10 +504,15 @@
+                     using var admission = ownership.EnterInput(physical);
+                     if (guard?.Invoke() != false) Events.Enqueue("key:" + string.Join(',', usages));
+                     return Task.CompletedTask;
++                }, SendButtonAsync: (page, code, phase, guard) =>
++                {
++                    using var admission = ownership.EnterInput(physical);
++                    if (guard?.Invoke() != false) Events.Enqueue("button:" + code + ":" + phase);
++                    return Task.CompletedTask;
+                 });
+             var device = new AutomationDevice(id, "Test phone", "iPhone", "26", "usb", Online, true, null,
+                 "WiredDirect", true, new(100, 200, geometry + ":" + generation), new(Supported, Supported, Supported, Supported,
+-                    Supported, Supported, Supported, Supported, Supported, Supported, Supported));
++                    Supported, Supported, Supported, Supported, Supported, Supported, Supported) { Shortcuts = DeviceSystemShortcuts.Supported(keyboard) });
+             return Task.FromResult(new AutomationTarget(device, id, physical, () => SessionCurrent() && geometry == Geometry, p => p,
+                 guard => new(id, guard, Send, (x, y) => (x, y)), keyboard,
+                 (kind, text, token) =>
+diff --git a/src/App/Automation/AutomationApiHost.cs b/src/App/Automation/AutomationApiHost.cs
+--- a/src/App/Automation/AutomationApiHost.cs
++++ b/src/App/Automation/AutomationApiHost.cs
+@@ -169,7 +169,7 @@
+                 app.MapPost("/api/v1/devices/{id}/input/" + action, async (string id, HttpContext c) =>
+                 {
+                     Permission("device.control");
+-                    if (action is "key" or "text") Permission("keyboard.input");
++                    if (action is "key" or "text" or "shortcut") Permission("keyboard.input");
+                     if (action == "text") Permission("clipboard.write");
+                     var body = await ReadAsync<AutomationInput>(c);
+                     return Results.Json(await service.InputAsync(id, principal, Session(c), action, body, c.RequestAborted), statusCode: 202);
+diff --git a/src/App/Automation/AutomationOpenApi.cs b/src/App/Automation/AutomationOpenApi.cs
+--- a/src/App/Automation/AutomationOpenApi.cs
++++ b/src/App/Automation/AutomationOpenApi.cs
+@@ -7,7 +7,7 @@
+ 
+ internal static class AutomationOpenApi
+ {
+-    internal static readonly string[] InputActions = ["tap", "long-press", "touch-down", "touch-up", "swipe", "touch-path", "key", "text"];
++    internal static readonly string[] InputActions = ["tap", "long-press", "touch-down", "touch-up", "swipe", "touch-path", "key", "text", "shortcut"];
+     internal static JsonObject Document()
+     {
+         var schemas = new JsonObject();
+@@ -62,7 +62,7 @@
+             {
+                 "tap" or "touch-down" => ["x", "y"], "long-press" => ["x", "y", "duration"],
+                 "touch-up" => ["touchId"], "swipe" => ["x1", "y1", "x2", "y2", "duration"],
+-                "touch-path" => ["points", "duration"], "key" => ["key"], _ => ["text"]
++                "touch-path" => ["points", "duration"], "key" => ["key"], "shortcut" => ["shortcut"], _ => ["text"]
+             };
+             input["required"] = new JsonArray(required.Select(s => (JsonNode?)JsonValue.Create(s)).ToArray());
+             var properties = (JsonObject)input["properties"]!;
+@@ -71,15 +71,17 @@
+                     ["description"] = "Capture pixels; must be less than the corresponding current geometry dimension." };
+             properties["duration"] = new JsonObject { ["type"] = "number", ["minimum"] = .05, ["maximum"] = 10 };
+             properties["points"] = JsonNode.Parse("""{"type":"array","minItems":2,"maxItems":256,"items":{"type":"object","required":["x","y"],"additionalProperties":false,"properties":{"x":{"type":"number","minimum":0},"y":{"type":"number","minimum":0}}}}""");
+-            foreach (var name in new[] { "text", "key", "touchId", "geometryVersion" })
++            foreach (var name in new[] { "text", "key", "shortcut", "touchId", "geometryVersion" })
+                 properties[name] = new JsonObject { ["type"] = "string" };
++            properties["shortcut"]!["enum"] = new JsonArray(DeviceSystemShortcuts.Names
++                .Select(s => (JsonNode?)JsonValue.Create(s)).ToArray());
+             properties["text"]!["description"] = "Maximum 64 KiB when encoded as UTF-8.";
+             input["additionalProperties"] = false;
+             input["description"] = "Coordinates are capture pixels, duration is seconds (0.05..10). " +
+                 (action == "text" ? "Uses the existing paste operation and changes the phone clipboard." : "touch-path contains 2..256 points, evenly timed over duration.");
+             schemas[action] = input;
+             Add("/api/v1/devices/{id}/input/" + action, "post", action,
+-                action == "text" ? "device.control, keyboard.input, clipboard.write" : action == "key" ? "device.control, keyboard.input" : "device.control",
++                action == "text" ? "device.control, keyboard.input, clipboard.write" : action is "key" or "shortcut" ? "device.control, keyboard.input" : "device.control",
+                 action, "Dispatched", 202, true);
+         }
+         Add("/api/v1/devices/{id}/clipboard", "get", "Read the device clipboard without copying into Windows", "clipboard.read", null, "Text");
+diff --git a/src/App/Services/Automation/AutomationContracts.cs b/src/App/Services/Automation/AutomationContracts.cs
+--- a/src/App/Services/Automation/AutomationContracts.cs
++++ b/src/App/Services/Automation/AutomationContracts.cs
+@@ -10,7 +10,10 @@
+ 
+ internal sealed record AutomationCapabilities(bool Tap, bool LongPress, bool TouchDown, bool TouchUp,
+     bool Swipe, bool TouchPath, bool Keyboard, bool TextInput, bool ClipboardRead, bool ClipboardWrite,
+-    bool Screenshot);
++    bool Screenshot)
++{
++    public string[] Shortcuts { get; init; } = [];
++}
+ internal sealed record AutomationGeometry(uint Width, uint Height, string Version,
+     string CoordinateSpace = "capturePixels");
+ internal sealed record AutomationDevice(string Id, string Name, string? Model, string? IosVersion,
+@@ -48,6 +51,7 @@
+     public double? Duration { get; init; }
+     public AutomationPoint[]? Points { get; init; }
+     public string? Key { get; init; }
++    public string? Shortcut { get; init; }
+     public string? Text { get; init; }
+     public string? TouchId { get; init; }
+     public string? GeometryVersion { get; init; }
+diff --git a/src/App/Services/Automation/AutomationService.cs b/src/App/Services/Automation/AutomationService.cs
+--- a/src/App/Services/Automation/AutomationService.cs
++++ b/src/App/Services/Automation/AutomationService.cs
+@@ -79,6 +79,11 @@
+                 Supported(target.Device.Capabilities.Keyboard);
+                 var (modifier, usage) = ParseKey(request.Key);
+                 await input.KeyAsync(target.KeyboardRoute!, modifier, usage, Current, ct);
++            }
++            else if (action == "shortcut")
++            {
++                Supported(target.Device.Capabilities.Keyboard);
++                await input.ShortcutAsync(target.KeyboardRoute!, request.Shortcut, Current, ct);
+             }
+             else if (action == "text")
+             {
+diff --git a/src/App/Services/Automation/DeviceInputService.cs b/src/App/Services/Automation/DeviceInputService.cs
+--- a/src/App/Services/Automation/DeviceInputService.cs
++++ b/src/App/Services/Automation/DeviceInputService.cs
+@@ -9,6 +9,15 @@
+     private readonly ConditionalWeakTable<object, SemaphoreSlim> _keyGates = new();
+     internal SemaphoreSlim KeyboardGate(DirectKeyboardRoute route) =>
+         _keyGates.GetValue(route.Session, _ => new SemaphoreSlim(1, 1));
++
++    internal async Task ShortcutAsync(DirectKeyboardRoute route, string? shortcut,
++        Func<bool> current, CancellationToken cancellation)
++    {
++        var gate = KeyboardGate(route);
++        await gate.WaitAsync(cancellation).ConfigureAwait(false);
++        try { await DeviceSystemShortcuts.SendAsync(route, shortcut, current, cancellation).ConfigureAwait(false); }
++        finally { gate.Release(); }
++    }
+ 
+     internal async Task KeyAsync(DirectKeyboardRoute route, byte modifier, byte usage,
+         Func<bool> current, CancellationToken cancellation)
+diff --git a/src/App/Services/BluetoothHidMouseService.cs b/src/App/Services/BluetoothHidMouseService.cs
+--- a/src/App/Services/BluetoothHidMouseService.cs
++++ b/src/App/Services/BluetoothHidMouseService.cs
+@@ -925,7 +925,25 @@
+             string.Equals(target, _targetDeviceUdid, StringComparison.OrdinalIgnoreCase);
+         return new(target, "BluetoothDirect", this, generation, Current,
+             (modifiers, usages, canSend) => QueueKeyboardAsync(modifiers, usages,
+-                () => Current() && canSend?.Invoke() != false));
++                () => Current() && canSend?.Invoke() != false),
++            SendShortcutAsync: async (shortcut, canSend) =>
++            {
++                bool Guard() => Current() && canSend();
++                if (!Guard()) throw new OperationCanceledException();
++                var usage = shortcut switch { "home" => (byte)0x0B, "control_center" => (byte)0x06,
++                    "notification_center" => (byte)0x11, "dock" => (byte)0x04, "siri" => (byte)0x16, _ => (byte)0 };
++                if (shortcut == "app_switcher") await SendIphoneAppSwitcherAsync(target, Guard);
++                else if (usage != 0) await SendIphoneSystemShortcutAsync(usage, target, Guard);
++                else
++                {
++                    var consumer = shortcut switch { "volume_up" => CoreDeviceTouchProtocol.IndigoVolumeUp,
++                        "volume_down" => CoreDeviceTouchProtocol.IndigoVolumeDown,
++                        "lock_screen" => CoreDeviceTouchProtocol.IndigoLock,
++                        _ => throw new Automation.AutomationException("INVALID_REQUEST", "Unsupported shortcut.", 400) };
++                    await SendIphoneConsumerShortcutAsync(consumer, shortcut == "lock_screen" ? 500 : 50, target, Guard);
++                }
++                if (!Guard()) throw new OperationCanceledException();
++            });
+     }
+ 
+     private Func<bool> CaptureReportSessionGuard(Func<bool>? canSend = null)
+diff --git a/src/App/Services/KeyboardInputRouter.cs b/src/App/Services/KeyboardInputRouter.cs
+--- a/src/App/Services/KeyboardInputRouter.cs
++++ b/src/App/Services/KeyboardInputRouter.cs
+@@ -65,7 +65,8 @@
+     Func<byte, IReadOnlyCollection<byte>, Func<bool>?, Task> SendAsync,
+     Func<ushort, ushort, string, Func<bool>?, Task>? SendButtonAsync = null,
+     Func<string, Func<bool>?, Task>? PasteTextAsync = null,
+-    Func<Func<bool>?, Task>? ReadClipboardAsync = null)
++    Func<Func<bool>?, Task>? ReadClipboardAsync = null,
++    Func<string, Func<bool>, Task>? SendShortcutAsync = null)
+ {
+     internal bool SameSession(DirectKeyboardRoute other) =>
+         ReferenceEquals(Session, other.Session) && Generation == other.Generation &&
+diff --git a/src/App/ViewModels/MainViewModel.Automation.cs b/src/App/ViewModels/MainViewModel.Automation.cs
+--- a/src/App/ViewModels/MainViewModel.Automation.cs
++++ b/src/App/ViewModels/MainViewModel.Automation.cs
+@@ -101,7 +101,8 @@
+                 device.IsWireless ? "airplay" : "usb", online, keyboard is not null && binding is not null,
+                 profile?.Id, keyboard?.Transport, capturing, geometry,
+                 new(touching, touching, touching, touching, touching, touching, keyboard is not null,
+-                    clipboard, clipboard, clipboard, capturing && width > 0 && height > 0));
++                    clipboard, clipboard, clipboard, capturing && width > 0 && height > 0)
++                { Shortcuts = DeviceSystemShortcuts.Supported(keyboard) });
+             // Capture the route on its owner thread. Workers use only the guarded
+             // delegates, never enumerate WPF collections to choose a target.
+             Func<bool>? admitted = null;
+diff --git a/src/App/Services/Automation/DeviceSystemShortcuts.cs b/src/App/Services/Automation/DeviceSystemShortcuts.cs
+new file mode 100644
+--- /dev/null
++++ b/src/App/Services/Automation/DeviceSystemShortcuts.cs
+@@ -0,0 +1,92 @@
++using IPhoneMirror.App.Services;
++
++namespace IPhoneMirror.App.Services.Automation;
++
++// Called under the lease operation lock and the captured session's keyboard gate.
++internal static class DeviceSystemShortcuts
++{
++    internal static readonly string[] Names = ["home", "app_switcher", "control_center",
++        "notification_center", "dock", "siri", "volume_up", "volume_down", "lock_screen"];
++
++    internal static string[] Supported(DirectKeyboardRoute? route) =>
++        route is not null && (route.SendShortcutAsync is not null || route.SendButtonAsync is not null)
++            ? Names.ToArray() : [];
++
++    internal static async Task SendAsync(DirectKeyboardRoute route, string? shortcut,
++        Func<bool> current, CancellationToken cancellation)
++    {
++        if (!Names.Contains(shortcut))
++            throw new AutomationException("INVALID_REQUEST", "Unsupported shortcut name.", 400);
++        if (!Supported(route).Contains(shortcut))
++            throw new AutomationException("CAPABILITY_NOT_SUPPORTED", "System shortcuts are unavailable on this transport.", 422);
++        bool CanSend() => !cancellation.IsCancellationRequested && current() && route.IsCurrent();
++        void Check()
++        {
++            cancellation.ThrowIfCancellationRequested();
++            if (!CanSend()) throw new OperationCanceledException();
++        }
++        Check();
++        if (route.SendShortcutAsync is { } bluetooth)
++        {
++            // The Bluetooth delegate captures its generation and target; its existing
++            // report helpers release consumer/navigation/keyboard reports on failure.
++            await bluetooth(shortcut!, CanSend).ConfigureAwait(false);
++            Check();
++            return;
++        }
++        const ushort page = CoreDeviceTouchProtocol.IndigoConsumerUsagePage;
++        async Task ReleaseKeyboard() => await route.SendAsync(0, [], null).ConfigureAwait(false);
++        async Task ReleaseGlobe() => await route.SendButtonAsync!(page,
++            CoreDeviceTouchProtocol.GlobeKeyboardLayoutUsage, "up", null).ConfigureAwait(false);
++        async Task Pulse(ushort usage, int holdMs)
++        {
++            Check();
++            try
++            {
++                await route.SendButtonAsync!(page, usage, "down", CanSend).ConfigureAwait(false);
++                await Task.Delay(holdMs, cancellation).ConfigureAwait(false);
++            }
++            finally
++            {
++                // Cleanup remains bound to the original session and ignores lease
++                // cancellation. Never send an up to a replacement route.
++                if (route.IsCurrent())
++                    await route.SendButtonAsync!(page, usage, "up", null)
++                        .WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
++            }
++        }
++        switch (shortcut)
++        {
++            case "home": await Pulse(CoreDeviceTouchProtocol.IndigoHome, 50); break;
++            case "app_switcher":
++                await Pulse(CoreDeviceTouchProtocol.IndigoHome, 50);
++                await Task.Delay(100, cancellation).ConfigureAwait(false);
++                await Pulse(CoreDeviceTouchProtocol.IndigoHome, 50);
++                break;
++            case "siri": await Pulse(CoreDeviceTouchProtocol.IndigoSiri, 1000); break;
++            case "volume_up": await Pulse(CoreDeviceTouchProtocol.IndigoVolumeUp, 50); break;
++            case "volume_down": await Pulse(CoreDeviceTouchProtocol.IndigoVolumeDown, 50); break;
++            case "lock_screen": await Pulse(CoreDeviceTouchProtocol.IndigoLock, 500); break;
++            default:
++                var usage = shortcut switch { "control_center" => (byte)0x06,
++                    "notification_center" => (byte)0x11, "dock" => (byte)0x04, _ => (byte)0 };
++                try
++                {
++                    await route.SendButtonAsync!(page, CoreDeviceTouchProtocol.GlobeKeyboardLayoutUsage,
++                        "down", CanSend).ConfigureAwait(false);
++                    Check();
++                    await route.SendAsync(0, [usage], CanSend).ConfigureAwait(false);
++                    await Task.Delay(20, cancellation).ConfigureAwait(false);
++                }
++                finally
++                {
++                    if (route.IsCurrent())
++                        await Task.WhenAll(
++                            ReleaseKeyboard(), ReleaseGlobe())
++                            .WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
++                }
++                break;
++        }
++        Check();
++    }
++}

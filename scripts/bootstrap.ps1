@@ -5,14 +5,16 @@ param(
     [string]$Proxy,
     [switch]$SkipCodex,
     [switch]$SkipDoctor,
-    [switch]$OpenDriverManager
+    [switch]$OpenDriverManager,
+    [switch]$SkipDrivers
 )
 $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT') { throw 'Bootstrap requires Windows 10/11 x64.' }
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $setupArgs = @{ EnableAutomationApi = $true }
 if ($SkipCodex) { $setupArgs.SkipCodex = $true }
-if ($SkipDoctor) { $setupArgs.SkipDoctor = $true }
+$setupArgs.SkipDoctor = $true
+if ($OpenDriverManager) { throw 'GUI driver setup was removed. Run bootstrap without -OpenDriverManager for headless setup.' }
 if (-not $SkipCodex -and -not (Get-Command codex -ErrorAction SilentlyContinue)) {
     throw 'Codex CLI not found. Use -SkipCodex for another MCP client, or install Codex CLI first; see docs/SETUP.md.'
 }
@@ -49,12 +51,16 @@ if ($MirrorPath) {
     $MirrorPath = & "$PSScriptRoot/install-runtime.ps1" @runtimeArgs
     $setupArgs.MirrorPath = $MirrorPath
 }
-Write-Host 'First device setup: connect/unlock/trust the phone, install USB drivers in the Driver manager, start capture, and enable wired control for input.'
-Write-Host 'Driver installation may require UAC. Wired control may require Developer Mode and an iOS restart. These prompts need human interaction.'
-if ($OpenDriverManager) {
-    $driverExe = Join-Path (Split-Path $MirrorPath -Parent) 'iPhoneMirror.Driver.exe'
-    if (-not (Test-Path -LiteralPath $driverExe)) { throw 'Driver manager not found next to the main program.' }
-    # The user explicitly requested an interactive driver window with this switch.
-    Start-Process -FilePath $driverExe
-}
 & "$PSScriptRoot/setup.ps1" @setupArgs
+if (-not $SkipDrivers) {
+    $driverArgs = @("$PSScriptRoot/setup-drivers.py")
+    if ($Proxy) { $driverArgs += @('--proxy', $Proxy) }
+    & (Join-Path $repoRoot '.venv/Scripts/python.exe') @driverArgs
+    if ($LASTEXITCODE -ne 0) { throw 'Driver setup requires action. Read the JSON actionRequired above, complete it and rerun; never retry an unknown transaction.' }
+}
+if (-not $SkipDoctor) {
+    & (Join-Path $repoRoot '.venv/Scripts/python.exe') "$PSScriptRoot/start-runtime.py"
+    if ($LASTEXITCODE -ne 0) { throw 'Background preparation requires action; see the MCP response.' }
+    & (Join-Path $repoRoot '.venv/Scripts/python.exe') "$PSScriptRoot/doctor.py"
+    if ($LASTEXITCODE -ne 0) { throw 'Device verification failed; see docs/SETUP.md.' }
+}

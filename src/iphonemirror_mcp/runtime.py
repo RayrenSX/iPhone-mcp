@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .client import AutomationClient
 from .credentials import configuration
+from .setup import SetupJobs
 
 
 class RuntimeClient:
@@ -15,6 +16,7 @@ class RuntimeClient:
         self.api = None
         self.observations = {}
         self.management_lock = asyncio.Lock()
+        self.setup = SetupJobs(self.executable)
 
     def connect(self):
         if self.api is None:
@@ -114,7 +116,14 @@ class RuntimeClient:
     async def start(self, device_id=None, enable_control=True):
         async with self.management_lock:
             # Validate support before launching: old apps ignore unknown CLI flags and show the main UI.
-            exe = self.executable()
+            try:
+                exe = self.executable()
+            except RuntimeError as error:
+                if not str(error).startswith("RUNTIME_NOT_INSTALLED"):
+                    raise
+                job = self.setup.begin(install_drivers=False)
+                return {"devicePrepared": False, "actionRequired": "wait_for_setup",
+                        "setup": job, "nextTool": "get_setup_status"}
             try:
                 await self.app_status()
             except RuntimeError as error:

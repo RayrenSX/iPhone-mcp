@@ -28,3 +28,72 @@ opening its independent preview. Preparation reuses capture/control sessions,
 suppresses automatic setup dialogs and reports missing prerequisites to the client.
 Active MCP control leases block preparation/window changes. Existing input APIs
 and their permission/lease checks remain in use.
+
+## Phone system shortcuts
+
+`iphonemirror-shortcuts.patch` is a supplemental patch for the complete runtime-v0.2.0
+corresponding source (or the exact upstream commit with the management patch applied).
+Apply it after `iphonemirror-management.patch`, never to an arbitrary upstream HEAD:
+
+```powershell
+git apply --ignore-space-change C:/path/to/iPhone-mcp/runtime-patches/iphonemirror-shortcuts.patch
+./build.ps1 -Configuration Release
+```
+
+The patch adds `POST /api/v1/devices/{id}/input/shortcut` with a JSON `shortcut` field,
+the nine names in `DeviceSystemShortcuts.cs`, OpenAPI enums, and per-device
+`capabilities.shortcuts`. It requires `device.control`, `keyboard.input`, and the
+existing control session. The native service uses both the lease operation lock and
+the keyboard session gate; transport cleanup ignores lease cancellation but stays on
+the original captured session. BLE reuses its guarded consumer/navigation helpers.
+No Windows hotkeys are synthesized and no shortcut settings are changed.
+`--ignore-space-change` permits applying to the release archive's CRLF source files.
+
+Keep the rebuilt executable with the runtime's existing native libraries, bridge tools
+and `mcp-runtime.json`; close the previous app normally and use
+`scripts/setup.ps1 -MirrorPath <rebuilt-runtime/iPhoneMirror.exe>` to select it.
+The original runtime-v0.2.0 download does not include this supplemental patch.
+
+Validation from this MCP checkout:
+
+```powershell
+.venv/Scripts/python.exe -m unittest discover -s tests -v
+.venv/Scripts/python.exe -m pip check
+dotnet run --project tests/native-shortcuts/ShortcutTests.csproj -c Release
+```
+
+The isolated native tests compile `DeviceSystemShortcuts.cs` against minimal transport
+contracts and cover all nine mappings, button/chord release, cancellation, uncertain
+dispatch failure, session replacement and BLE delegation. Build the complete patched
+native app as well to verify its real contracts. Automated dispatch tests do not prove
+the phone UI changed; verify a fresh screenshot after an explicitly authorized action.
+
+## Headless driver setup
+
+Add `FirstRunDriverHost.cs` to the corresponding native source alongside the
+management/shortcut changes. It adds `--first-run-pipe <nonce> diagnose|prepare
+<serial>` to the driver executable; no driver-manager window is opened. Communication
+uses a private current-user pipe. Apple MSI uses `/quiet /norestart`; existing
+signature checks, elevation, snapshot and rollback remain in force. Healthy
+components are preserved, missing components installed, and unhealthy filters repaired.
+
+Publish the driver and retain the full runtime payload:
+
+```powershell
+dotnet publish src/DriverInstaller/iPhoneMirror.DriverInstaller.csproj -c Release -o out/driver
+```
+
+Place the rebuilt iPhoneMirror.Driver.exe beside the rebuilt app, then add
+`"driverSetupVersion": 1` to mcp-runtime.json only for this rebuilt package.
+The public runtime-v0.2.0 lacks this entry point. This checkout provides a local
+candidate; publishing a compatible release is still required for fresh-machine downloads.
+
+MCP `prepare_iphone_environment` starts a background job; `get_setup_status`
+returns progress, sanitized error codes, and human actions. The calling AI must
+present those actions: connect/replug USB, select a device, confirm UAC or restart.
+`driversReady` only reports installation/inspection success. `phoneReady` remains
+false until the caller verifies startup and a fresh snapshot separately.
+Multiple clients are serialized by an OS file lock; driver mutations also have a
+native operation gate. Keep MCP connected during installation. If disconnected or
+timed out, do not retry an uncertain MSI transaction; diagnose its outcome first.
+Jobs are session-local, and automatic repair is limited to diagnosed components.

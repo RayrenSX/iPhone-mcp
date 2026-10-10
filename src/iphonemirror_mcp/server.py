@@ -24,6 +24,8 @@ Coordinate = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Duration = Annotated[float, Field(ge=0.05, le=10, allow_inf_nan=False)]
 LeaseDuration = Annotated[int, Field(ge=5, le=300)]
 GeometryVersion = Annotated[str, Field(min_length=1)]
+Shortcut = Literal["home", "app_switcher", "control_center", "notification_center",
+                   "dock", "siri", "volume_up", "volume_down", "lock_screen"]
 
 
 class Point(BaseModel):
@@ -60,7 +62,20 @@ snapshot provides OCR text observations with IDs, not a semantic accessibility
 tree. click_element requires a fresh snapshot ID; use native capture pixels for
 all input. Cropped/resized snapshots include a transform back to native pixels.
 scroll direction means content navigation: down moves the finger upwards.
-This server cannot install drivers, connect devices, launch apps by bundle ID,
+Use prepare_iphone_environment for headless runtime/driver setup and get_setup_status
+to poll the returned jobId. Present actionRequired to the user: connect_usb, replug_usb,
+restart_windows, or select_device. UAC and phone trust/unlock remain human actions.
+Keep this MCP session open until installation reaches a terminal state. Never retry
+an uncertain driver transaction, uninstall working drivers, or retry phone input.
+For replug_usb ask the user to unplug/reconnect USB, keep the phone unlocked and
+accept Trust This Computer if offered; then run prepare_iphone_environment again.
+For connect_usb ask for a USB data cable and an unlocked phone. For restart_windows
+ask the user to save work and restart. For confirm_uac ask them to accept Windows
+elevation. Do not claim a prompt is visible without observing it. For failed jobs
+diagnose first: native prepare repairs only detected unhealthy components. Do not
+loop on DRIVER_INSTALL_FAILED or DRIVER_OUTCOME_UNKNOWN; keep the error evidence.
+After completed setup call start_iphonemirror and verify snapshot and controlReady.
+This server cannot physically connect devices, launch apps by bundle ID,
 read accessibility trees, run shell commands, or collect iOS system logs.
 """)
 READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
@@ -79,9 +94,35 @@ async def start_iphonemirror(ctx: Context, device_id: str | None = None, enable_
 
     Defaults to the sole online device; multiple devices require an explicit device_id.
     Does not send phone input or open a preview. Missing trust, driver, pairing or
-    Developer Mode requires human action. Install the supported runtime via bootstrap first.
+    Developer Mode requires human action. A missing runtime starts a setup job;
+    poll get_setup_status, then call this tool again. Drivers use prepare_iphone_environment.
     """
     return await client(ctx).start(device_id, enable_control)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                    idempotentHint=False, openWorldHint=True))
+async def prepare_iphone_environment(ctx: Context, install_drivers: bool = True,
+                                     device_id: str | None = None, proxy: str | None = None) -> dict:
+    """Install missing runtime and selected-device drivers without a driver-manager GUI.
+
+    Returns immediately with jobId; poll get_setup_status. device_id is a setup:
+    ID returned in setup.devices, not the app device ID. Multiple phones require
+    selection. Existing healthy drivers are preserved by native inspection.
+    Direct downloads first; optional proxy is a fallback, with no system change.
+    UAC remains visible. Report actionRequired to the user and verify capture after
+    setup. Do not repeat failed/unknown installations without fresh diagnosis.
+    """
+    api = client(ctx)
+    if install_drivers and api.api is not None and api.api.sessions:
+        raise RuntimeError("CONTROL_LOCKED: release control before driver setup")
+    return api.setup.begin(install_drivers, device_id, proxy)
+
+
+@mcp.tool(annotations=READ)
+async def get_setup_status(job_id: str, ctx: Context) -> dict:
+    """Read setup progress/actionRequired. Installation completion is not phone readiness."""
+    return client(ctx).setup.status(job_id)
 
 
 @mcp.tool(annotations=READ)
@@ -186,6 +227,26 @@ async def press_key(device_id: str, key: str, ctx: Context) -> dict:
     Requires control and keyboard.input. Does not accept arbitrary shortcuts.
     """
     return await client(ctx).input(device_id, "key", key=key)
+
+
+@mcp.tool(annotations=WRITE)
+async def press_shortcut(device_id: str, shortcut: Shortcut, ctx: Context) -> dict:
+    """Run an iPhoneMirror phone system action on the explicitly selected device.
+
+    Requires acquired control, keyboard.input and capabilities.shortcuts support.
+    home is the iOS Home action; press_key(HOME) is the keyboard navigation key.
+    Uses the native device route without changing Windows hotkey settings or focus.
+    Observe first, invoke once, verify a fresh snapshot, then release control.
+    Locking the phone may stop capture. dispatched does not confirm a UI effect.
+    """
+    api = client(ctx)
+    status = await api.request("GET", api.path(device_id, "/status"))
+    shortcuts = status.get("capabilities", {}).get("shortcuts")
+    if shortcuts is None:
+        raise RuntimeError("RUNTIME_UPGRADE_REQUIRED: install a runtime with the shortcut API; no input was sent")
+    if shortcut not in shortcuts:
+        raise RuntimeError("CAPABILITY_NOT_SUPPORTED: this connection does not support the requested shortcut; no input was sent")
+    return await api.input(device_id, "shortcut", shortcut=shortcut)
 
 
 @mcp.tool(annotations=WRITE)

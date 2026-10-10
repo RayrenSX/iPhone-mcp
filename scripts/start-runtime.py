@@ -18,6 +18,9 @@ async def run():
                 print("Background startup failed. Check the installed runtime and port.")
                 return 2
             output = json.loads(next(c.text for c in result.content if c.type == "text"))
+            if output.get("actionRequired") == "wait_for_setup":
+                print(json.dumps({"actionRequired": "wait_for_setup", "setup": output["setup"]}))
+                return 2
             output.pop("device_id", None)
             print(json.dumps(output, indent=2))
             return 0
