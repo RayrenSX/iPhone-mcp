@@ -85,8 +85,9 @@ dotnet publish src/DriverInstaller/iPhoneMirror.DriverInstaller.csproj -c Releas
 
 Place the rebuilt iPhoneMirror.Driver.exe beside the rebuilt app, then add
 `"driverSetupVersion": 1` to mcp-runtime.json only for this rebuilt package.
-The public runtime-v0.2.0 lacks this entry point. This checkout provides a local
-candidate; publishing a compatible release is still required for fresh-machine downloads.
+The original runtime-v0.2.0 lacks this entry point. runtime-v0.2.1 includes the
+rebuilt driver with this marker and complete corresponding source. Actual missing
+driver installation and healthy reinspection are recorded in docs/HEADLESS_DRIVER_VALIDATION.md.
 
 MCP `prepare_iphone_environment` starts a background job; `get_setup_status`
 returns progress, sanitized error codes, and human actions. The calling AI must

@@ -12,8 +12,8 @@ from pathlib import Path
 
 import httpx
 
-TAG = "runtime-v0.2.0"
-ASSET = "iPhoneMirror-mcp-runtime-v0.2.0-win-x64.zip"
+TAG = "runtime-v0.2.1"
+ASSET = "iPhoneMirror-mcp-runtime-v0.2.1-win-x64.zip"
 RELEASE = f"https://github.com/RayrenSX/iPhone-mcp/releases/download/{TAG}"
 
 
@@ -138,10 +138,14 @@ def driver_events(exe, operation, serial=""):
         1, 65536, 65536, 0, security)
     process = None
     try:
+        # MCP SDK clients deliberately pass a small environment. WPF's font
+        # initialization requires windir even when SYSTEMROOT is present.
+        environment = dict(os.environ)
+        environment["windir"] = win32api.GetWindowsDirectory()
         process = subprocess.Popen([str(exe.parent / "iPhoneMirror.Driver.exe"),
             "--first-run-pipe", name, operation, serial], stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NO_WINDOW)
+            creationflags=subprocess.CREATE_NO_WINDOW, env=environment)
         deadline = time.monotonic() + 1800
         buffer = b""
         connected = False

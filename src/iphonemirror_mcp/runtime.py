@@ -52,7 +52,7 @@ class RuntimeClient:
             try:
                 configured = json.loads((folder / "runtime.json").read_text(encoding="utf-8-sig"))["executable"]
             except (OSError, ValueError, KeyError):
-                configured = str(folder / "runtime" / "v0.2.0" / "app" / "iPhoneMirror.exe")
+                configured = str(folder / "runtime" / "v0.2.1" / "app" / "iPhoneMirror.exe")
         exe = Path(configured).resolve()
         if exe.name.casefold() != "iphonemirror.exe" or not exe.is_file():
             raise RuntimeError("RUNTIME_NOT_INSTALLED: run scripts/bootstrap.ps1 first")

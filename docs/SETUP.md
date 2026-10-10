@@ -8,8 +8,8 @@ cd iPhone-mcp
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap.ps1
 ```
 
-Bootstrap installs missing Python using winget, downloads this repository's runtime-v0.2.0,
-verifies SHA256SUMS.txt, and installs it under %LOCALAPPDATA%/iPhone-mcp/runtime/v0.2.0/app.
+Bootstrap installs missing Python using winget, downloads this repository's runtime-v0.2.1,
+verifies SHA256SUMS.txt, and installs it under %LOCALAPPDATA%/iPhone-mcp/runtime/v0.2.1/app.
 It installs the MCP package, registers Codex, starts the background runtime and diagnoses real screenshots/OCR.
 The main window stays hidden. Older official runtimes lack background management: close them normally and rerun.
 Complete corresponding native source and patch are provided with the release; see runtime-patches/README.md.
@@ -23,8 +23,11 @@ selects an existing compatible runtime. scripts/setup.ps1 can reuse that runtime
 ## First device preparation
 
 1. Connect by USB data cable, unlock the phone and confirm Trust This Computer.
-2. explicitly opens the driver UI. Install missing Apple USB support and capture filters
-   using its one-click installer, confirming UAC if requested. Do not reinstall working drivers.
+2. Bootstrap runs scripts/setup-drivers.py without the driver-manager GUI. MCP clients use
+   prepare_iphone_environment and poll get_setup_status. Requires driverSetupVersion=1,
+   included in runtime-v0.2.1. Present actionRequired to the user; confirm UAC if requested,
+   replug USB when reported, and rerun diagnosis. Healthy drivers are skipped. -SkipDrivers
+   configures MCP without driver installation. Keep the client connected until a terminal state.
 3. Input requires pairing/binding, iPhone Developer Mode and possible restart confirmation.
    The first DDI download needs network access. Finish reported prerequisites and retry.
 4. In a new Codex session call start_iphonemirror. A sole online device is prepared automatically;
@@ -69,8 +72,8 @@ Never commit keys, identities or screenshots; do not edit running settings.json 
 
 ## Phone system shortcuts
 
-`press_shortcut` requires a native runtime with the shortcut API; the original downloadable
-runtime-v0.2.0 does not include it. Apply/build the supplemental patch following
+`press_shortcut` requires a native runtime with the shortcut API, included in runtime-v0.2.1;
+the original runtime-v0.2.0 does not include it. Upgrade or apply/build the supplemental patch following
 runtime-patches/README.md, then select that compatible app with setup.ps1 -MirrorPath.
 Close the previous app normally before starting the replacement. Start a new MCP session
 to reload the 28-tool catalog, inspect get_device_status.capabilities.shortcuts, and acquire

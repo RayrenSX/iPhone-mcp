@@ -5,12 +5,22 @@ import time
 import unittest
 from contextlib import nullcontext
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
-from iphonemirror_mcp.setup import ASSET, SetupFailure, SetupGate, SetupJobs, checksum, driver_id
+from iphonemirror_mcp.setup import ASSET, SetupFailure, SetupGate, SetupJobs, checksum, driver_id, driver_events
 
 
 class SetupTests(unittest.TestCase):
+    def test_driver_launch_restores_windir_in_filtered_client_environment(self):
+        import win32api
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            (folder / 'mcp-runtime.json').write_text('{"driverSetupVersion":1}')
+            with patch.dict('os.environ', {'LOCALAPPDATA': directory}, clear=True), patch(
+                'iphonemirror_mcp.setup.subprocess.Popen', return_value=Mock(poll=Mock(return_value=0))) as launch:
+                self.assertEqual(list(driver_events(folder / 'iPhoneMirror.exe', 'diagnose')), [])
+                self.assertEqual(launch.call_args.kwargs['env']['windir'], win32api.GetWindowsDirectory())
+
     def finish(self, jobs, status):
         deadline = time.monotonic() + 3
         while status['state'] == 'running' and time.monotonic() < deadline:

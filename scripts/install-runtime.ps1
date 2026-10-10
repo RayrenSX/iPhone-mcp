@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$TargetDirectory = (Join-Path $env:LOCALAPPDATA 'iPhone-mcp/runtime/v0.2.0'),
+    [string]$TargetDirectory = (Join-Path $env:LOCALAPPDATA 'iPhone-mcp/runtime/v0.2.1'),
     [string]$Proxy
 )
 $ErrorActionPreference = 'Stop'
@@ -10,8 +10,8 @@ $ProgressPreference = 'SilentlyContinue'
 if ($env:OS -ne 'Windows_NT' -or -not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') {
     throw 'The device runtime requires Windows 10/11 x64; ARM64 is not supported.'
 }
-$releaseTag = 'runtime-v0.2.0'
-$assetName = 'iPhoneMirror-mcp-runtime-v0.2.0-win-x64.zip'
+$releaseTag = 'runtime-v0.2.1'
+$assetName = 'iPhoneMirror-mcp-runtime-v0.2.1-win-x64.zip'
 $releaseUrl = "https://github.com/RayrenSX/iPhone-mcp/releases/download/$releaseTag"
 $destination = [IO.Path]::GetFullPath($TargetDirectory)
 $receiptPath = Join-Path $destination 'install-receipt.json'
@@ -60,5 +60,5 @@ $exe = Join-Path $appPath 'iPhoneMirror.exe'
 if (-not (Test-Path -LiteralPath (Join-Path $appPath 'iPhoneMirror.Driver.exe'))) { throw 'Driver manager missing from runtime.' }
 @{ releaseTag = $releaseTag; sha256 = $actual; source = "$releaseUrl/$assetName" } |
     ConvertTo-Json | Set-Content -LiteralPath $receiptPath -Encoding UTF8
-Write-Host 'Runtime downloaded and checksum verified. USB drivers still require the Driver manager.'
+Write-Host 'Runtime downloaded and checksum verified. Run headless driver setup and follow its actionRequired results.'
 return $exe
