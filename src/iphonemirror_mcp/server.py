@@ -16,8 +16,7 @@ from mcp.types import ImageContent, TextContent, ToolAnnotations
 from PIL import Image as PillowImage, ImageChops, ImageStat
 from pydantic import BaseModel, ConfigDict, Field
 
-from .client import AutomationClient
-from .credentials import configuration
+from .runtime import RuntimeClient
 from .vision import capture, recognize, render, scroll_points
 
 Coordinate = Annotated[float, Field(ge=0, allow_inf_nan=False)]
@@ -33,8 +32,8 @@ class Point(BaseModel):
 
 
 @asynccontextmanager
-async def lifespan(server: FastMCP) -> AsyncIterator[AutomationClient]:
-    client = AutomationClient(*configuration())
+async def lifespan(server: FastMCP) -> AsyncIterator[RuntimeClient]:
+    client = RuntimeClient()
     try:
         yield client
     finally:
@@ -42,7 +41,10 @@ async def lifespan(server: FastMCP) -> AsyncIterator[AutomationClient]:
 
 
 mcp = FastMCP("iPhoneMirror", lifespan=lifespan, log_level="WARNING", instructions="""
-Control and inspect devices already connected and configured in iPhoneMirror.
+Use start_iphonemirror to launch the background app, enable its API, start capture
+and prepare reverse control. The main window remains hidden; open_independent_window
+explicitly shows the selected phone preview. get_app_status reports visibility.
+MCP initialization does not require an already running app or an existing API key.
 Start with list_devices, get_device_status, and screenshot; respect capabilities.
 Acquire control explicitly before input. Renew with acquire_control before expiresAt;
 release_control when done. Leases and secrets are managed inside this server.
@@ -63,10 +65,37 @@ read accessibility trees, run shell commands, or collect iOS system logs.
 READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
 WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=True,
                         idempotentHint=False, openWorldHint=False)
+MANAGE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 
 
-def client(ctx: Context) -> AutomationClient:
+def client(ctx: Context) -> RuntimeClient:
     return ctx.request_context.lifespan_context
+
+
+@mcp.tool(annotations=MANAGE)
+async def start_iphonemirror(ctx: Context, device_id: str | None = None, enable_control: bool = True) -> dict:
+    """Start iPhoneMirror in the background, enable API/capture and prepare reverse control.
+
+    Defaults to the sole online device; multiple devices require an explicit device_id.
+    Does not send phone input or open a preview. Missing trust, driver, pairing or
+    Developer Mode requires human action. Install the supported runtime via bootstrap first.
+    """
+    return await client(ctx).start(device_id, enable_control)
+
+
+@mcp.tool(annotations=READ)
+async def get_app_status(ctx: Context) -> dict:
+    """Check management support, API, background mode and main/independent window visibility."""
+    return await client(ctx).app_status()
+
+
+@mcp.tool(annotations=MANAGE)
+async def open_independent_window(device_id: str, ctx: Context) -> dict:
+    """Open/activate this device's standalone preview while the main app stays hidden.
+
+    Release control leases before changing window/capture setup. No device input is sent.
+    """
+    return await client(ctx).request("POST", client(ctx).path(device_id, "/window/open"))
 
 
 @mcp.tool(annotations=READ)

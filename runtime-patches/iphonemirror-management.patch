@@ -1,0 +1,362 @@
+diff --git a/src/App/App.xaml.cs b/src/App/App.xaml.cs
+index 282786d..7894d13 100644
+--- a/src/App/App.xaml.cs
++++ b/src/App/App.xaml.cs
+@@ -13,6 +13,7 @@ public partial class App : Application
+     internal bool IsSystemSessionEnding { get; private set; }
+     internal bool IsUiPreviewMode { get; set; }
+     internal CompactLaunchOptions LaunchOptions { get; private set; } = new(false, null);
++    internal bool AutomationBackground { get; set; }
+     private readonly UpdateSettingsStore _settingsStore = new();
+     private readonly GitHubReleaseClient _releaseClient = new();
+     private AboutWindow? _aboutWindow;
+@@ -63,6 +64,7 @@ public partial class App : Application
+                 ("arguments", e.Args.Length));
+             LocalizationService.Initialize();
+             LaunchOptions = CompactLaunchOptions.Parse(e.Args);
++            AutomationBackground = LaunchOptions.AutomationBackground;
+             AppIdentity.Initialize();
+             UpdateSettings = _settingsStore.Load();
+             ThemeService.Apply(UpdateSettings.Theme);
+@@ -108,7 +110,10 @@ public partial class App : Application
+                 Dispatcher.BeginInvoke(() =>
+                 {
+                     if (MainWindow is MainWindow window)
+-                        _ = window.OpenCompactRequestAsync(options);
++                    {
++                        if (options.AutomationBackground) _ = window.StartAutomationBackgroundAsync();
++                        else _ = window.OpenCompactRequestAsync(options);
++                    }
+                 }));
+             if (LaunchOptions.Enabled)
+             {
+@@ -146,6 +151,12 @@ public partial class App : Application
+ 
+     private void ShowInitialWindow()
+     {
++        if (AutomationBackground && MainWindow is MainWindow backgroundWindow)
++        {
++            ShutdownMode = ShutdownMode.OnExplicitShutdown;
++            _ = backgroundWindow.StartAutomationBackgroundAsync();
++            return;
++        }
+         var startProjection = false;
+         if (MainWindow is MainWindow setupWindow && !LaunchOptions.Enabled && new FirstRunSetupStore().Load().ShouldOpen)
+             startProjection = setupWindow.ShowFirstRunSetup();
+diff --git a/src/App/Automation/AutomationApiHost.cs b/src/App/Automation/AutomationApiHost.cs
+index 3776cf3..4cc280f 100644
+--- a/src/App/Automation/AutomationApiHost.cs
++++ b/src/App/Automation/AutomationApiHost.cs
+@@ -14,7 +14,8 @@ using IPhoneMirror.App.Services.Automation;
+ 
+ namespace IPhoneMirror.App.Automation;
+ 
+-internal sealed class AutomationApiHost(AutomationService service) : IAsyncDisposable
++internal sealed class AutomationApiHost(AutomationService service,
++    Func<string, string?, bool, CancellationToken, Task<object>>? management = null) : IAsyncDisposable
+ {
+     private WebApplication? _app;
+     private int _accepting;
+@@ -123,6 +124,25 @@ internal sealed class AutomationApiHost(AutomationService service) : IAsyncDispo
+             }
+             app.MapGet("/api/docs", () => Results.Content(AutomationOpenApi.Docs, "text/html; charset=utf-8"));
+             app.MapGet("/api/v1/openapi.json", () => Results.Json(AutomationOpenApi.Document()));
++            app.MapGet("/api/v1/app/status", async (HttpContext c) =>
++            {
++                Permission("device.read");
++                if (management is null) throw new AutomationException("UNSUPPORTED_RUNTIME", "Application management is unavailable.", 501);
++                return Results.Json(await management("status", null, false, c.RequestAborted));
++            });
++            app.MapPost("/api/v1/devices/{id}/prepare", async (string id, HttpContext c) =>
++            {
++                Permission("device.control", "screen.capture");
++                var request = await ReadAsync<PrepareRequest>(c);
++                if (management is null) throw new AutomationException("UNSUPPORTED_RUNTIME", "Application management is unavailable.", 501);
++                return Results.Json(await management("prepare", id, request.EnableControl, c.RequestAborted));
++            });
++            app.MapPost("/api/v1/devices/{id}/window/open", async (string id, HttpContext c) =>
++            {
++                Permission("device.control", "screen.capture");
++                if (management is null) throw new AutomationException("UNSUPPORTED_RUNTIME", "Application management is unavailable.", 501);
++                return Results.Json(await management("window", id, false, c.RequestAborted));
++            });
+             app.MapGet("/api/v1/devices", async (HttpContext c) =>
+             { Permission("device.read"); return Results.Json(new { devices = await service.DevicesAsync(c.RequestAborted) }); });
+             app.MapGet("/api/v1/devices/{id}", async (string id, HttpContext c) =>
+@@ -224,6 +244,7 @@ internal sealed class AutomationApiHost(AutomationService service) : IAsyncDispo
+         await context.Response.WriteAsJsonAsync(new { error = new { code = error.Code, message = error.Message }, requestId = context.TraceIdentifier }, context.RequestAborted);
+     }
+     private sealed record AcquireRequest(int DurationSeconds = 30);
++    private sealed record PrepareRequest(bool EnableControl = true);
+     private sealed record TextRequest(string? Text);
+     private sealed class TokenBucket(int rate, int burst)
+     {
+diff --git a/src/App/MainWindow.Automation.cs b/src/App/MainWindow.Automation.cs
+index 3063322..3818c8b 100644
+--- a/src/App/MainWindow.Automation.cs
++++ b/src/App/MainWindow.Automation.cs
+@@ -43,7 +43,7 @@ public partial class MainWindow
+     {
+         if (_automationHost is not null) return;
+         _automationService = new(_viewModel, _viewModel.AutomationOwnership, _viewModel.DeviceInput);
+-        _automationHost = new(_automationService);
++        _automationHost = new(_automationService, ManageAutomationAsync);
+         _automationHost.StateChanged += () =>
+         {
+             if (Dispatcher.CheckAccess()) UpdateAutomationState();
+diff --git a/src/App/MainWindow.CompactLaunch.cs b/src/App/MainWindow.CompactLaunch.cs
+index ebdab73..7ef90af 100644
+--- a/src/App/MainWindow.CompactLaunch.cs
++++ b/src/App/MainWindow.CompactLaunch.cs
+@@ -14,7 +14,7 @@ public partial class MainWindow
+     private async Task InitializeDeviceStartupAsync()
+     {
+         var options = (Application.Current as App)?.LaunchOptions;
+-        if (options is not { Enabled: true })
++        if (options is not { Enabled: true } || options.AutomationBackground)
+         {
+             await _viewModel.RefreshAsync();
+             return;
+diff --git a/src/App/MainWindow.Tray.cs b/src/App/MainWindow.Tray.cs
+index 9876544..1bcff65 100644
+--- a/src/App/MainWindow.Tray.cs
++++ b/src/App/MainWindow.Tray.cs
+@@ -14,7 +14,7 @@ public partial class MainWindow
+     private TrayPanelWindow? _trayPanel;
+     private ProjectionSettingsWindow? _traySettingsWindow;
+     private bool _startupServicesStarted;
+-    internal bool IsTrayMode => _viewModel.IsTrayApplicationMode;
++    internal bool IsTrayMode => _viewModel.IsTrayApplicationMode || (Application.Current as App)?.AutomationBackground == true;
+ 
+     internal void StartInTray()
+     {
+@@ -61,6 +61,7 @@ public partial class MainWindow
+         catch (Exception error)
+         {
+             DisposeTray();
++            if ((Application.Current as App)?.AutomationBackground == true) return;
+             _viewModel.SelectedApplicationDisplayMode = ApplicationDisplayMode.Complete;
+             ShowInTaskbar = true;
+             Show();
+@@ -80,6 +81,7 @@ public partial class MainWindow
+ 
+     private async Task MoveActiveProjectionToTrayAsync()
+     {
++        if ((Application.Current as App)?.AutomationBackground == true) return;
+         try
+         {
+             if (_mediaCastActive) ShowMediaCastPreviewWindow();
+@@ -148,6 +150,7 @@ public partial class MainWindow
+ 
+     private void QueueTrayProjection(string udid, ulong sessionHandle)
+     {
++        if ((Application.Current as App)?.AutomationBackground == true) return;
+         // Wait for session creation/recovery to release its gate before attaching
+         // a renderer, and ignore callbacks invalidated by a stop or mode change.
+         Dispatcher.BeginInvoke(new Action(async () =>
+diff --git a/src/App/Services/CompactLaunchOptions.cs b/src/App/Services/CompactLaunchOptions.cs
+index 71c4fa6..c2c7db6 100644
+--- a/src/App/Services/CompactLaunchOptions.cs
++++ b/src/App/Services/CompactLaunchOptions.cs
+@@ -5,15 +5,17 @@ using IPhoneMirror.App.Localization;
+ 
+ namespace IPhoneMirror.App.Services;
+ 
+-internal sealed record CompactLaunchOptions(bool Enabled, string? DeviceId)
++internal sealed record CompactLaunchOptions(bool Enabled, string? DeviceId, bool AutomationBackground = false)
+ {
+     internal static CompactLaunchOptions Parse(IReadOnlyList<string> arguments)
+     {
+         var enabled = false;
++        var background = false;
+         string? device = null;
+         for (var index = 0; index < arguments.Count; ++index)
+         {
+-            if (arguments[index] == "--compact") enabled = true;
++            if (arguments[index] == "--automation-background") { enabled = true; background = true; }
++            else if (arguments[index] == "--compact") enabled = true;
+             else if (arguments[index] == "--device")
+             {
+                 if (++index >= arguments.Count || string.IsNullOrWhiteSpace(arguments[index]) ||
+@@ -23,7 +25,7 @@ internal sealed record CompactLaunchOptions(bool Enabled, string? DeviceId)
+                 enabled = true;
+             }
+         }
+-        return new(enabled, device);
++        return new(enabled, device, background);
+     }
+ 
+     internal int SelectDevice(IReadOnlyList<string> availableIds)
+diff --git a/src/App/ViewModels/MainViewModel.MultiControl.cs b/src/App/ViewModels/MainViewModel.MultiControl.cs
+index 22d7b33..5a9c09e 100644
+--- a/src/App/ViewModels/MainViewModel.MultiControl.cs
++++ b/src/App/ViewModels/MainViewModel.MultiControl.cs
+@@ -32,14 +32,14 @@ internal sealed partial class MainViewModel
+         {
+             // Automatic recovery must not take focus from another device.
+             // Its failure remains visible when this device is selected again.
+-            if (_disposed || (snapshot.Prompt is null && snapshot.Stage != ControlStage.Failed)) return;
++            if (_disposed || AutomationControlStartup.Contains(udid) || (snapshot.Prompt is null && snapshot.Stage != ControlStage.Failed)) return;
+             var dispatcher = Application.Current?.Dispatcher;
+             if (dispatcher is null || dispatcher.HasShutdownStarted) return;
+             dispatcher.BeginInvoke(new Action(() =>
+             {
+                 if (_disposed || (snapshot.Prompt is null &&
+                     !DeviceViewModel.UdidEquals(SelectedDevice?.Udid, udid))) return;
+-                if (!SetupActive && Application.Current?.MainWindow is { } owner)
++                if (!SetupActive && !AutomationControlStartup.Contains(udid) && Application.Current?.MainWindow is { } owner)
+                     ReverseControlStatusWindow.Show(owner, control.ControlStatus,
+                         () => _ = CancelReverseControlAsync(snapshot.Mode, udid),
+                         () => _ = StartDeviceControlAsync(udid, snapshot.Mode == ControlStatusMode.Wireless));
+@@ -98,7 +98,7 @@ internal sealed partial class MainViewModel
+                 NotifyUsbControlStateChanged();
+                 // Every entry (toolbar, shortcut, preview menu, command and retry)
+                 // opens the same status surface before inspecting the binding.
+-                if (!SetupActive && Application.Current?.MainWindow is { } owner)
++                if (!SetupActive && !AutomationControlStartup.Contains(target) && Application.Current?.MainWindow is { } owner)
+                     ReverseControlStatusWindow.Show(owner, control.ControlStatus,
+                         () => _ = CancelReverseControlAsync(mode, target),
+                         () => _ = StartDeviceControlAsync(target, wireless));
+@@ -164,6 +164,12 @@ internal sealed partial class MainViewModel
+     private void ShowDeviceControlError(DeviceControlSession control, string transport,
+         string? detail, string titleKey = "ReverseControlStartErrorTitle",
+         string? technicalDetails = null, Func<Task>? retryOperation = null) =>
+-        ShowReverseControlError(transport, detail, titleKey, technicalDetails,
+-            retryOperation, control);
++        ShowAutomationAwareControlError(control, transport, detail, titleKey, technicalDetails, retryOperation);
++
++    private void ShowAutomationAwareControlError(DeviceControlSession control, string transport,
++        string? detail, string titleKey, string? technicalDetails, Func<Task>? retryOperation)
++    {
++        if (AutomationControlStartup.Contains(control.DeviceUdid)) return;
++        ShowReverseControlError(transport, detail, titleKey, technicalDetails, retryOperation, control);
++    }
+ }
+diff --git a/src/App/ViewModels/MainViewModel.cs b/src/App/ViewModels/MainViewModel.cs
+index b40be2c..a904cea 100644
+--- a/src/App/ViewModels/MainViewModel.cs
++++ b/src/App/ViewModels/MainViewModel.cs
+@@ -2575,6 +2575,7 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
+ 
+     private async Task<bool> ConfirmReverseControlPrerequisitesAsync(DeviceControlSession control, bool wireless, CancellationToken cancellationToken)
+     {
++        if (AutomationControlStartup.Contains(control.DeviceUdid)) return true;
+         var acknowledged = wireless
+             ? _wirelessControlPrerequisiteAcknowledged
+             : _wiredControlPrerequisiteAcknowledged;
+@@ -6013,7 +6014,9 @@ internal sealed partial class MainViewModel : INotifyPropertyChanged
+         if (driverStatus.State is IPhoneFilterDriverState.PendingRestart or
+             IPhoneFilterDriverState.Missing or IPhoneFilterDriverState.InvalidStack or
+             IPhoneFilterDriverState.Error)
+-            OpenDriverManager(automatic: true);
++        {
++            if ((Application.Current as App)?.AutomationBackground != true) OpenDriverManager(automatic: true);
++        }
+         var errorCode = (int)NativeResult.CaptureBackendUnavailable;
+         var failureKind = driverStatus.State == IPhoneFilterDriverState.NoDevice
+             ? CaptureFailureKind.UsbConnection
+diff --git a/src/App/ViewModels/MainViewModel.AutomationManagement.cs b/src/App/ViewModels/MainViewModel.AutomationManagement.cs
+new file mode 100644
+index 0000000..004f90a
+--- /dev/null
++++ b/src/App/ViewModels/MainViewModel.AutomationManagement.cs
+@@ -0,0 +1,28 @@
++using IPhoneMirror.App.Services;
++
++namespace IPhoneMirror.App.ViewModels;
++
++internal sealed partial class MainViewModel
++{
++    internal HashSet<string> AutomationControlStartup { get; } = new(StringComparer.OrdinalIgnoreCase);
++
++    internal async Task StartAutomationControlAsync(string source, bool wireless, CancellationToken cancellation)
++    {
++        if (!AutomationControlStartup.Add(source)) throw new InvalidOperationException("Control preparation already active.");
++        try
++        {
++            await (wireless ? StartWirelessControlAsync(source) : StartUsbControlAsync(source))
++                .WaitAsync(TimeSpan.FromSeconds(45), cancellation);
++        }
++        catch (Exception) when (cancellation.IsCancellationRequested)
++        {
++            await CancelReverseControlAsync(wireless ? ControlStatusMode.Wireless : ControlStatusMode.Usb, source);
++            throw;
++        }
++        catch (TimeoutException)
++        {
++            await CancelReverseControlAsync(wireless ? ControlStatusMode.Wireless : ControlStatusMode.Usb, source);
++        }
++        finally { AutomationControlStartup.Remove(source); }
++    }
++}
+diff --git a/src/App/MainWindow.AutomationManagement.cs b/src/App/MainWindow.AutomationManagement.cs
+new file mode 100644
+index 0000000..f03fcb5
+--- /dev/null
++++ b/src/App/MainWindow.AutomationManagement.cs
+@@ -0,0 +1,65 @@
++using System.Windows;
++using IPhoneMirror.App.Services.Automation;
++
++namespace IPhoneMirror.App;
++
++public partial class MainWindow
++{
++    private readonly SemaphoreSlim _automationManagementGate = new(1, 1);
++
++    internal async Task StartAutomationBackgroundAsync()
++    {
++        if (_shutdownStarted || Application.Current is not App app) return;
++        app.AutomationBackground = true;
++        app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
++        Hide();
++        StartInTray();
++        if (!AutomationRunning)
++        {
++            var settings = AutomationConfiguration;
++            settings.Enabled = true;
++            await ConfigureAutomationAsync(settings, save: false);
++        }
++    }
++
++    private async Task<object> ManageAutomationAsync(string action, string? id, bool enableControl, CancellationToken cancellation)
++    {
++        var operation = await Dispatcher.InvokeAsync(() => ManageAutomationUiAsync(action, id, enableControl, cancellation));
++        return await operation;
++    }
++
++    private async Task<object> ManageAutomationUiAsync(string action, string? id, bool enableControl, CancellationToken cancellation)
++    {
++        if (action == "status") return new { managementVersion = 1, background = (Application.Current as App)?.AutomationBackground == true,
++            mainWindowVisible = IsVisible, apiRunning = AutomationRunning, independentWindowOpen = _secondaryMirrors.HasAnyOpen };
++        if (!await _automationManagementGate.WaitAsync(0, cancellation))
++            throw new AutomationException("MANAGEMENT_BUSY", "Another device preparation is active.");
++        try
++        {
++            var device = _viewModel.Devices.FirstOrDefault(d => AutomationDeviceId.Encode(d.Udid) == id)
++                ?? throw new AutomationException("DEVICE_NOT_FOUND", "Select a device returned by list_devices.", 404);
++            var physical = _viewModel.AutomationPhysicalId(device.Udid);
++            if (_viewModel.AutomationOwnership.Snapshot().Any(l => l.PhysicalId == physical))
++                throw new AutomationException("CONTROL_LOCKED", "Release the device control lease before preparing or opening its window.");
++            cancellation.ThrowIfCancellationRequested();
++            if (action == "window")
++            {
++                var result = await _secondaryMirrors.ShowAsync(device);
++                if (!result.Success) throw new AutomationException("DEVICE_NOT_READY", result.Message);
++                return new { opened = _secondaryMirrors.IsOpen(device), mainWindowVisible = IsVisible };
++            }
++            var started = await _viewModel.StartBackgroundSessionAsync(device);
++            if (!started.Success) throw new AutomationException("DEVICE_NOT_READY", started.Message);
++            var backend = (IAutomationBackend)_viewModel;
++            var target = await backend.ResolveAsync(id!, cancellation);
++            if (enableControl && !target.Device.ControlAvailable)
++                await _viewModel.StartAutomationControlAsync(device.Udid, device.IsWireless, cancellation);
++            target = await backend.ResolveAsync(id!, cancellation);
++            return new { capturing = target.Device.Capturing, controlAvailable = target.Device.ControlAvailable,
++                mainWindowVisible = IsVisible,
++                actionRequired = enableControl && !target.Device.ControlAvailable
++                    ? "Check device binding, unlock/trust, Developer Mode and matching DDI in iPhoneMirror diagnostics." : null };
++        }
++        finally { _automationManagementGate.Release(); }
++    }
++}

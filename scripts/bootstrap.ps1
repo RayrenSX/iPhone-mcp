@@ -37,8 +37,12 @@ $running = @(Get-Process iPhoneMirror -ErrorAction SilentlyContinue)
 if ($MirrorPath) {
     $setupArgs.MirrorPath = $MirrorPath
 } elseif ($running.Count -gt 0) {
-    Write-Host 'Using the running iPhoneMirror. If API UI is missing, close the old version and rerun bootstrap.'
     $MirrorPath = $running[0].Path
+    if (-not (Test-Path -LiteralPath (Join-Path (Split-Path $MirrorPath -Parent) 'mcp-runtime.json'))) {
+        throw 'An older iPhoneMirror is running. Close it normally and rerun bootstrap to install the background runtime.'
+    }
+    Write-Host 'Using the running MCP-compatible iPhoneMirror.'
+    $setupArgs.MirrorPath = $MirrorPath
 } else {
     $runtimeArgs = @{}
     if ($Proxy) { $runtimeArgs.Proxy = $Proxy }

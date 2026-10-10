@@ -15,14 +15,26 @@ function Run-Checked([string]$Command, [string[]]$Arguments) {
     if ($LASTEXITCODE -ne 0) { throw "Command failed (exit $LASTEXITCODE): $Command" }
 }
 
+$managedRuntime = $false
+if (-not $MirrorPath) {
+    $currentApp = Get-Process iPhoneMirror -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($currentApp) { $MirrorPath = $currentApp.Path }
+}
 if ($MirrorPath) {
     $mirrorExe = (Resolve-Path -LiteralPath $MirrorPath).Path
+    $managedRuntime = Test-Path -LiteralPath (Join-Path (Split-Path $mirrorExe -Parent) 'mcp-runtime.json')
     if (-not (Get-Process iPhoneMirror -ErrorAction SilentlyContinue)) {
-        Start-Process -FilePath $mirrorExe -WindowStyle Hidden
+        if ($managedRuntime) { Start-Process -FilePath $mirrorExe -ArgumentList '--automation-background' -WindowStyle Hidden }
+        else { Start-Process -FilePath $mirrorExe -WindowStyle Hidden }
         Start-Sleep -Seconds 3
     }
+    if ($managedRuntime) {
+        $runtimeFolder = Join-Path $env:LOCALAPPDATA 'iPhone-mcp'
+        New-Item -ItemType Directory -Path $runtimeFolder -Force | Out-Null
+        @{ executable = $mirrorExe } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runtimeFolder 'runtime.json') -Encoding UTF8
+    }
 }
-if ($EnableAutomationApi) { & "$PSScriptRoot/enable-api.ps1" }
+if ($EnableAutomationApi -and -not $managedRuntime) { & "$PSScriptRoot/enable-api.ps1" }
 
 $venvPython = Join-Path $repoRoot '.venv/Scripts/python.exe'
 if (-not (Test-Path -LiteralPath $venvPython)) {
@@ -56,6 +68,10 @@ if (-not $SkipCodex) {
 }
 Write-Host 'MCP configured. Generated artifacts/mcp-config.json for other clients. Open a new Codex session.'
 if (-not $SkipDoctor) {
+    if ($managedRuntime) {
+        & $venvPython "$PSScriptRoot/start-runtime.py"
+        if ($LASTEXITCODE -ne 0) { throw 'Background runtime start failed; see the MCP response above.' }
+    }
     & $venvPython "$PSScriptRoot/doctor.py"
     if ($LASTEXITCODE -ne 0) { throw 'Configured, but device validation failed. Follow docs/SETUP.md and rerun doctor.py.' }
 }

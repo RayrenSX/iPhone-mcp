@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$TargetDirectory = (Join-Path $env:LOCALAPPDATA 'iPhone-mcp/runtime/v1.8.5-pre2'),
+    [string]$TargetDirectory = (Join-Path $env:LOCALAPPDATA 'iPhone-mcp/runtime/v0.2.0'),
     [string]$Proxy
 )
 $ErrorActionPreference = 'Stop'
@@ -10,9 +10,9 @@ $ProgressPreference = 'SilentlyContinue'
 if ($env:OS -ne 'Windows_NT' -or -not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') {
     throw 'The device runtime requires Windows 10/11 x64; ARM64 is not supported.'
 }
-$releaseTag = 'v1.8.5-pre2'
-$assetName = "iPhoneMirror-$releaseTag-win-x64.zip"
-$releaseUrl = "https://github.com/RayrenSX/iPhoneMirror/releases/download/$releaseTag"
+$releaseTag = 'runtime-v0.2.0'
+$assetName = 'iPhoneMirror-mcp-runtime-v0.2.0-win-x64.zip'
+$releaseUrl = "https://github.com/RayrenSX/iPhone-mcp/releases/download/$releaseTag"
 $destination = [IO.Path]::GetFullPath($TargetDirectory)
 $receiptPath = Join-Path $destination 'install-receipt.json'
 if (Test-Path -LiteralPath $receiptPath) {
@@ -26,7 +26,7 @@ if (Test-Path -LiteralPath $receiptPath) {
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
 $downloadArgs = @{ UseBasicParsing = $true; TimeoutSec = 900 }
 if ($Proxy) { $downloadArgs.Proxy = $Proxy }
-Write-Host "Downloading official iPhoneMirror $releaseTag runtime (~203 MiB); no drivers are changed."
+Write-Host "Downloading iPhone-mcp background runtime $releaseTag; no drivers are changed."
 $manifest = (Invoke-WebRequest @downloadArgs -Uri "$releaseUrl/SHA256SUMS.txt").Content
 if ($manifest -is [byte[]]) { $manifest = [Text.Encoding]::UTF8.GetString($manifest) }
 $expected = Get-ReleaseChecksum "$manifest" $assetName

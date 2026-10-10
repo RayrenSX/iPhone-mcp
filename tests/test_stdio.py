@@ -16,6 +16,15 @@ PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4
 
 
 class ProtocolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_mcp_initializes_without_api_key_or_running_app(self):
+        params = StdioServerParameters(command=sys.executable, args=["-m", "iphonemirror_mcp"],
+            env={"IPHONEMIRROR_API_KEY": "", "IPHONEMIRROR_LOCAL_KEY_STORE": "0"})
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                names = {tool.name for tool in (await session.list_tools()).tools}
+                self.assertTrue({"start_iphonemirror", "get_app_status", "open_independent_window"} <= names)
+
     async def asyncSetUp(self):
         self.requests = []
         requests = self.requests
@@ -82,7 +91,7 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
                     initialized = await session.initialize()
                     self.assertEqual(initialized.serverInfo.name, "iPhoneMirror")
                     tools = {t.name: t for t in (await session.list_tools()).tools}
-                    self.assertEqual(len(tools), 22)
+                    self.assertEqual(len(tools), 25)
                     self.assertIn("geometry_version", tools["tap"].inputSchema["required"])
                     self.assertNotIn("ctx", tools["tap"].inputSchema["properties"])
                     self.assertTrue(tools["screenshot"].annotations.readOnlyHint)

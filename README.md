@@ -23,11 +23,11 @@ cd iPhone-mcp
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap.ps1 -OpenDriverManager
 ```
 
-脚本检测 Python，缺失时通过 winget 安装；没有运行中的 iPhoneMirror 时，自动下载并
-校验支持 Automation API 的 `v1.8.5-pre2` 官方便携包、启动主程序。
-随后安装 MCP 依赖、启用 API、注册 Codex，执行真实 stdio 握手/截图/OCR 诊断。
+脚本检测 Python，缺失时通过 winget 安装；没有运行中的兼容 iPhoneMirror 时，自动下载并
+校验本仓库 `runtime-v0.2.0` 后台运行包。随后安装 MCP 依赖、注册 Codex，
+通过 MCP 启动隐藏主窗口的应用、启用 API、准备投屏和反控，执行真实截图/OCR 诊断。
 首次使用还需在打开的驱动管理器中点“一键安装全部驱动”，手机信任电脑，
-在主程序开始投屏并开启有线控制。完成后重跑诊断。
+完成开发者模式及配对后，再调用 `start_iphonemirror`。已有正常设备无需重新安装驱动。
 密钥留在当前用户 DPAPI，不写入 Codex 配置。
 详细参数、主程序获取和排错见 [自动配置指南](docs/SETUP.md)。
 手机连接、信任、解锁、开发者模式重启及 Windows 管理员确认仍可能需要人操作。
@@ -36,8 +36,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap.ps1 -OpenD
 ## 环境
 
 - Python 3.11+；OCR 和本地密钥读取需要 Windows。
-- iPhoneMirror，启用开发者工具中的 Automation API（默认 `127.0.0.1:17890`）。
-- 已连接、信任并开启投屏的设备；输入还需在主程序中启用已有反控连接。
+- 本仓库后台运行包；`start_iphonemirror` 自动启用本地 Automation API（默认 `127.0.0.1:17890`）。
+- 已连接、信任的设备；MCP 自动准备投屏与反控，手机开发者模式等首次步骤仍需完成。
 - Windows OCR 语言包；本机实测有 `en-US`、`zh-Hans-CN`。
 
 从本项目目录安装：
@@ -57,7 +57,7 @@ codex mcp get iphone-mcp
 ```
 
 `--local-key-store` 读取当前 Windows 用户的 iPhoneMirror DPAPI 密钥及设置端口。
-密钥不写进 Codex 配置、不返回模型；不是跨用户读取，也不会启用 API 或创建新密钥。
+密钥不写进 Codex 配置、不返回模型；只读取当前用户。后台应用负责创建密钥和启用 API。
 显式环境变量 `IPHONEMIRROR_API_KEY` 和 `IPHONEMIRROR_API_URL` 可以覆盖上述配置。
 
 通用 MCP 客户端 JSON：
@@ -77,10 +77,11 @@ codex mcp get iphone-mcp
 本机 Codex CLI 的只读测试可以截图、查询，控制工具因权限策略被拒绝；
 Full access 测试成功完成获取控制、点击、再次截图与释放。不需要在项目中保存模型 API 密钥。
 
-## 22 个工具
+## 25 个工具
 
 | 类别 | 工具 |
 |---|---|
+| 应用与窗口 | `start_iphonemirror`, `get_app_status`, `open_independent_window` |
 | 设备 | `list_devices`, `get_device_status` |
 | 图像与文字观察 | `screenshot`, `snapshot` |
 | 控制租约 | `acquire_control`, `release_control` |
@@ -89,8 +90,14 @@ Full access 测试成功完成获取控制、点击、再次截图与释放。�
 | 输入与剪贴板 | `press_key`, `type_text`, `read_clipboard`, `write_clipboard` |
 | 等待 | `wait`, `wait_for` |
 
-推荐流程：`list_devices` → `snapshot` → 检查能力/画面 → `acquire_control`
+推荐流程：`start_iphonemirror` → `list_devices` → `snapshot` → 检查能力/画面 → `acquire_control`
 → 一次输入 → 等待界面稳定 → `snapshot` 验证 → `release_control`。
+
+MCP 握手和工具枚举不要求应用已打开或密钥已存在。调用 `start_iphonemirror` 后，
+主窗口保持隐藏，默认不打开独立窗口；唯一在线设备自动准备，多设备必须指定 `device_id`。
+只观察可传 `enable_control=false`。需要可见画面时调用 `open_independent_window(device_id)`；
+先释放控制租约。`get_app_status` 可确认窗口/API 状态。关闭 MCP 连接不会结束独立窗口。
+运行包及完整对应源码见 [runtime-v0.2.0](https://github.com/RayrenSX/iPhone-mcp/releases/tag/runtime-v0.2.0)。
 
 `snapshot` 同时返回状态、OCR 文本框、截图与坐标变换；OCR 文本框不是 UI 可访问性节点。
 可以选择原始像素区域、显示宽度、文字标注与网格；OCR 在原始完整截图上执行。

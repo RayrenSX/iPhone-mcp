@@ -17,7 +17,7 @@ class AutomationClient:
             raise ValueError("Set IPHONEMIRROR_API_KEY to the key copied from Developer tools")
         self.http = httpx.AsyncClient(
             base_url=address.rstrip("/") + "/api/v1/", headers={"X-API-Key": key},
-            timeout=30, follow_redirects=False, trust_env=False,
+            timeout=httpx.Timeout(30, connect=3), follow_redirects=False, trust_env=False,
             transport=transport or httpx.AsyncHTTPTransport(retries=0),
         )
         self.sessions: dict[str, str] = {}
@@ -31,7 +31,7 @@ class AutomationClient:
         return "devices/" + quote(device_id, safe="") + suffix
 
     async def request(self, method: str, path: str, body=None, *, device_id=None,
-                      control=False, binary=False):
+                      control=False, binary=False, timeout=None):
         headers = {}
         if control:
             token = self.sessions.get(device_id)
@@ -39,7 +39,8 @@ class AutomationClient:
                 raise RuntimeError("CONTROL_REQUIRED: call acquire_control for this device first")
             headers["X-Control-Session"] = token
         try:
-            response = await self.http.request(method, path, json=body, headers=headers)
+            options = {"timeout": timeout} if timeout is not None else {}
+            response = await self.http.request(method, path, json=body, headers=headers, **options)
         except httpx.TimeoutException:
             raise RuntimeError("API_TIMEOUT: the action may already have happened. Do not retry input automatically; inspect device status and screenshot first.") from None
         except httpx.RequestError:

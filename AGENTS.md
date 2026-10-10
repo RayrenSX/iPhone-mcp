@@ -12,10 +12,10 @@ When asked to install/configure this project, execute the steps; do not just des
    when installation is authorized; rediscover the executable after installation.
 2. For a fresh machine run
    `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap.ps1 -OpenDriverManager`.
-   Bootstrap installs missing Python using winget, downloads/checksums the official
-   API-compatible iPhoneMirror v1.8.5-pre2 portable runtime if no app is running, and starts it.
-   The latest stable v1.8.3 lacks Automation API; don't use it for this MCP.
-   Bootstrap uses the existing running app without replacing it; if that app lacks API,
+   Bootstrap installs missing Python using winget and downloads/checksums this repository's
+   runtime-v0.2.0 background runtime if no app is running. Official older runtimes lack
+   the management endpoints; don't use them for background startup.
+   Bootstrap uses an existing compatible app; if that app lacks the runtime marker,
    close it normally and rerun. A `-MirrorPath <actual-exe>` overrides runtime discovery.
 3. Follow docs/SETUP.md to prepare USB drivers, Trust This Computer, capture and wired control.
    The driver manager's one-click installer handles missing Apple USB support and filters.
@@ -27,13 +27,16 @@ When asked to install/configure this project, execute the steps; do not just des
 4. Resolve failed checks, then rerun `.venv/Scripts/python.exe scripts/doctor.py`.
    Exit 0 means a real screenshot succeeded through stdio MCP and API. Check `controlReady`
    and each device's `ocr` separately; observation readiness does not imply input readiness.
-5. Open a new Codex session (running tool catalogs may not reload). Call list_devices,
+5. Open a new Codex session (running tool catalogs may not reload). Call start_iphonemirror,
+   then list_devices,
    get_device_status and snapshot through the client's actual MCP tools. Report whether the
    client invocation was verified or only the stdio diagnostic was verified.
 
 USB connection, unlocking, Trust This Computer, pairing and on-phone permission prompts
 may require the human. Continue all independent configuration before asking for these.
-Use iPhoneMirror's own UI for capture/control setup; don't fabricate device readiness.
+Use start_iphonemirror for hidden capture/control preparation; specify device_id when multiple
+devices are online. Read devicePrepared/actionRequired rather than assuming readiness.
+Call open_independent_window only when a visible preview is requested; release the lease first.
 Never weaken Codex permission settings just to make a diagnostic pass.
 
 ## Input and verification
