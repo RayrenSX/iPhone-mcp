@@ -1,0 +1,18 @@
+[
+  {"tool":"acquire_control","args":{"duration_seconds":120}},
+  {"tool":"snapshot","args":{"language":"en-US","region":[0,0,1082,1100],"max_width":800}},
+  {"tool":"tap","args":{"x":550,"y":1100}},
+  {"tool":"snapshot","args":{"language":"en-US","region":[0,0,1082,1100],"max_width":800}},
+  {"tool":"long_press","args":{"x":550,"y":1100,"duration":0.3}},
+  {"tool":"snapshot","args":{"language":"en-US","region":[0,0,1082,1100],"max_width":800}},
+  {"tool":"swipe","args":{"x1":550,"y1":1300,"x2":550,"y2":900,"duration":0.4}},
+  {"tool":"snapshot","args":{"language":"en-US","region":[0,0,1082,1100],"max_width":800}},
+  {"tool":"touch_path","args":{"points":[{"x":400,"y":1200},{"x":650,"y":1100},{"x":500,"y":900}],"duration":0.4}},
+  {"tool":"snapshot","args":{"language":"en-US","region":[0,0,1082,1100],"max_width":800}},
+  {"tool":"scroll","args":{"direction":"down","distance":350}},
+  {"tool":"snapshot","args":{"language":"en-US","region":[0,0,1082,1100],"max_width":800}},
+  {"tool":"drag","args":{"x1":400,"y1":1200,"x2":650,"y2":900,"duration":0.4}},
+  {"tool":"snapshot","args":{"language":"en-US","region":[0,0,1082,1100],"max_width":800}},
+  {"tool":"wait_for","args":{"condition":"text_exists","text":"touchend","language":"en-US","timeout":2}},
+  {"tool":"wait_for","args":{"condition":"control_available","timeout":1}}
+]

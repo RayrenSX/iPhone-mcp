@@ -1,0 +1,6 @@
+[
+  {"tool":"acquire_control","args":{"duration_seconds":30}},
+  {"tool":"type_at","args":{"x":290,"y":1303,"text":"iphone-mcp-type-at"}},
+  {"tool":"wait","args":{"duration":0.7}},
+  {"tool":"snapshot","args":{"language":"en-US","max_width":800}}
+]

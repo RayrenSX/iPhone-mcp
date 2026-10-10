@@ -1,0 +1,9 @@
+[
+  {"tool":"acquire_control","args":{"duration_seconds":60}},
+  {"tool":"touch_down","args":{"x":500,"y":1150}},
+  {"tool":"wait","args":{"duration":0.6}},
+  {"tool":"snapshot","args":{"language":"en-US","max_width":800}},
+  {"tool":"touch_up","args":{"touch_id":"$last_touch_id"}},
+  {"tool":"wait","args":{"duration":0.6}},
+  {"tool":"snapshot","args":{"language":"en-US","max_width":800}}
+]

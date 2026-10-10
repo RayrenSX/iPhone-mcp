@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "iphone-mcp"
+version = "0.1.0"
+description = "MCP tools for the iPhoneMirror local Automation API"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-only"
+dependencies = [
+    "mcp>=1.26,<2", "httpx>=0.28,<1", "pillow>=11,<13",
+    "pywin32>=310; sys_platform == 'win32'",
+    "winrt-Windows.Media.Ocr>=3.2,<4; sys_platform == 'win32'",
+    "winrt-Windows.Graphics.Imaging>=3.2,<4; sys_platform == 'win32'",
+    "winrt-Windows.Storage.Streams>=3.2,<4; sys_platform == 'win32'",
+    "winrt-Windows.Globalization>=3.2,<4; sys_platform == 'win32'",
+    "winrt-Windows.Foundation>=3.2,<4; sys_platform == 'win32'",
+    "winrt-Windows.Foundation.Collections>=3.2,<4; sys_platform == 'win32'",
+]
+
+[project.scripts]
+iphone-mcp = "iphonemirror_mcp.server:main"
+
+[project.urls]
+Repository = "https://github.com/RayrenSX/iPhone-mcp"
+Issues = "https://github.com/RayrenSX/iPhone-mcp/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/iphonemirror_mcp"]

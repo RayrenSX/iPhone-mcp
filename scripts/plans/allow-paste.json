@@ -1,0 +1,7 @@
+[
+  {"tool":"acquire_control","args":{"duration_seconds":30}},
+  {"tool":"snapshot","args":{"language":"zh-Hans-CN","max_width":800}},
+  {"tool":"tap","args":{"x":345,"y":1340}},
+  {"tool":"wait","args":{"duration":1}},
+  {"tool":"snapshot","args":{"language":"en-US","max_width":800}}
+]

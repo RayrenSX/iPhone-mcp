@@ -1,0 +1,6 @@
+[
+  {"tool":"acquire_control","args":{"duration_seconds":30}},
+  {"tool":"tap","args":{"x":992,"y":208}},
+  {"tool":"wait","args":{"duration":0.5}},
+  {"tool":"snapshot","args":{"language":"en-US","max_width":800}}
+]

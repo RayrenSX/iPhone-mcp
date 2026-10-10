@@ -1,0 +1,7 @@
+[
+  {"tool":"acquire_control","args":{"duration_seconds":30}},
+  {"tool":"snapshot","args":{"language":"en-US","max_width":800}},
+  {"tool":"click_element","match":"192.168.137.1"},
+  {"tool":"wait","args":{"duration":0.7}},
+  {"tool":"snapshot","args":{"language":"en-US","max_width":800}}
+]
