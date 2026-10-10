@@ -16,6 +16,7 @@ from mcp.types import ImageContent, TextContent, ToolAnnotations
 from PIL import Image as PillowImage, ImageChops, ImageStat
 from pydantic import BaseModel, ConfigDict, Field
 
+from .client import AutomationClient
 from .runtime import RuntimeClient
 from .vision import capture, recognize, render, scroll_points
 
