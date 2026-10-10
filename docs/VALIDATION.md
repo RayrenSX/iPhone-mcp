@@ -11,6 +11,10 @@
 原生 Release 构建通过，Python 自动测试28项通过。后台启动使用当前用户本地 WMI，
 避免 MCP 客户端 Windows Job 在断开时结束应用；补齐过滤环境中的 WINDIR 供 WPF 初始化。
 本机已有驱动、信任、开发者模式及 DDI；未在空白虚拟机验证首次驱动/配对流程。
+发布后实际通过 `install-runtime.ps1` 从 GitHub 下载运行包，验证 SHA256 并安装到稳定目录；
+正常退出测试包后，用下载的运行包重新执行上述冷启动、截图、租约保护及独立窗口测试，全部通过。
+`setup.ps1` 更新依赖至0.2.0并重新注册 Codex；doctor 报告25个工具、ready/controlReady/OCR均通过。
+GitHub Actions 在 Python 3.11 和3.13的 Windows 测试、wheel构建及 PowerShell 校验均通过。
 以下 v0.1 历史验证使用旧运行包和22个工具，保留原始证据范围。
 
 测试时间使用 Asia/Shanghai。测试对象为真实 USB iPhone，原始投屏尺寸为 **1082×2340**。
