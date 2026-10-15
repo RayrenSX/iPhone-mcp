@@ -87,10 +87,9 @@ async def recognize(png: bytes, language: str | None = None) -> dict:
         stream.close()
 
 
-def render(frame: Frame, *, region: list[int] | None, max_width: int,
-           grid: int, elements: list[dict]) -> tuple[bytes, dict]:
-    image = Image.open(io.BytesIO(frame.png)).convert("RGB")
-    width, height = image.size
+def image_transform(frame: Frame, region: list[int] | None, max_width: int) -> dict:
+    """Validate the native crop and calculate display geometry without encoding an image."""
+    width, height = frame.width, frame.height
     left, top, right, bottom = 0, 0, width, height
     if region is not None:
         if len(region) != 4:
@@ -98,6 +97,50 @@ def render(frame: Frame, *, region: list[int] | None, max_width: int,
         left, top, right, bottom = region
         if not (0 <= left < right <= width and 0 <= top < bottom <= height):
             raise ValueError("region must lie inside the native capture frame")
+    image_width, image_height = right - left, bottom - top
+    if max_width and image_width > max_width:
+        image_height = max(1, round(image_height * max_width / image_width))
+        image_width = max_width
+    return {"imageWidth": image_width, "imageHeight": image_height,
+            "nativeWidth": width, "nativeHeight": height,
+            "offsetX": left, "offsetY": top,
+            "scaleX": (right - left) / image_width,
+            "scaleY": (bottom - top) / image_height,
+            "formula": "nativeX=offsetX+imageX*scaleX; nativeY=offsetY+imageY*scaleY"}
+
+
+def visible_elements(ocr: dict, region: list[int] | None) -> list[dict]:
+    """Keep original IDs/native bounds, including lines that partially overlap the crop."""
+    if region is None:
+        return list(ocr["elements"])
+    left, top, right, bottom = region
+    return [e for e in ocr["elements"] if e["bounds"][0] < right
+            and e["bounds"][2] > left and e["bounds"][1] < bottom
+            and e["bounds"][3] > top]
+
+
+def ocr_view(ocr: dict, elements: list[dict], *, compact: bool, cropped: bool) -> dict:
+    """Project OCR for the client while retaining original precision inside the server."""
+    if not compact:
+        result = dict(ocr, elements=elements)
+        if cropped:
+            result["text"] = "\n".join(e["text"] for e in elements)
+        return result
+    result = {k: ocr[k] for k in ("language", "semanticTreeAvailable") if k in ocr}
+    if ocr.get("textAngle") is not None:
+        result["textAngle"] = ocr["textAngle"]
+    result["elements"] = [{"id": e["id"], "text": e["text"],
+                           "bounds": [round(v, 1) for v in e["bounds"]]} for e in elements]
+    return result
+
+
+def render(frame: Frame, *, region: list[int] | None, max_width: int,
+           grid: int, elements: list[dict]) -> tuple[bytes, dict]:
+    transform = image_transform(frame, region, max_width)
+    left, top = transform["offsetX"], transform["offsetY"]
+    right, bottom = region[2:] if region else (frame.width, frame.height)
+    with Image.open(io.BytesIO(frame.png)) as raw:
+        image = raw.convert("RGB")
     draw = ImageDraw.Draw(image)
     for element in elements:
         bounds = element["bounds"]
@@ -109,16 +152,10 @@ def render(frame: Frame, *, region: list[int] | None, max_width: int,
             draw.line((x, top, x, bottom), fill="#00c8ff", width=2)
             draw.line((left, y, right, y), fill="#00c8ff", width=2)
     image = image.crop((left, top, right, bottom))
-    if max_width and image.width > max_width:
-        image = image.resize((max_width, max(1, round(image.height * max_width / image.width))))
+    if image.size != (transform["imageWidth"], transform["imageHeight"]):
+        image = image.resize((transform["imageWidth"], transform["imageHeight"]), Image.Resampling.LANCZOS)
     output = io.BytesIO()
     image.save(output, format="PNG")
-    transform = {"imageWidth": image.width, "imageHeight": image.height,
-                 "nativeWidth": width, "nativeHeight": height,
-                 "offsetX": left, "offsetY": top,
-                 "scaleX": (right - left) / image.width,
-                 "scaleY": (bottom - top) / image.height,
-                 "formula": "nativeX=offsetX+imageX*scaleX; nativeY=offsetY+imageY*scaleY"}
     return output.getvalue(), transform
 
 

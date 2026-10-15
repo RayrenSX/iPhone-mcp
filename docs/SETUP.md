@@ -24,7 +24,11 @@ selects an existing compatible runtime. scripts/setup.ps1 can reuse that runtime
 
 1. Connect by USB data cable, unlock the phone and confirm Trust This Computer.
 2. Bootstrap runs scripts/setup-drivers.py without the driver-manager GUI. MCP clients use
-   prepare_iphone_environment and poll get_setup_status. Requires driverSetupVersion=1,
+   prepare_iphone_environment and poll get_setup_status with the returned jobId,
+   after_revision=revision and timeout=20 to wait for a change (maximum 30s).
+   Omit the new parameters for an immediate read. Terminal/action_required states
+   return immediately; present actionRequired to the user instead of repeatedly polling.
+   Requires driverSetupVersion=1,
    included in runtime-v0.2.1. Present actionRequired to the user; confirm UAC if requested,
    replug USB when reported, and rerun diagnosis. Healthy drivers are skipped. -SkipDrivers
    configures MCP without driver installation. Keep the client connected until a terminal state.
@@ -51,6 +55,7 @@ codex mcp get iphone-mcp
 
 start-runtime performs actual stdio startup/device preparation. doctor enumerates 28 tools, devices,
 status, real screenshots and OCR without sending phone input or printing identities, screen text or keys.
+Status is reused from the verified snapshot; the separate OCR check omits its image payload.
 ready=true proves a screenshot; controlReady reports input availability, not verified input effects.
 Exit code 2 means the API or device is not ready.
 
@@ -69,6 +74,23 @@ The key is current-user DPAPI at %LOCALAPPDATA%/iPhoneMirror/automation-key.bin.
 The API port comes from settings.json (default 17890); only loopback HTTP origins are accepted.
 IPHONEMIRROR_API_KEY / IPHONEMIRROR_API_URL override connection settings; IPHONEMIRROR_EXE overrides runtime discovery.
 Never commit keys, identities or screenshots; do not edit running settings.json to bypass application flows.
+
+## Compact observations
+
+Refresh the MCP connection or start a new session after updating this checkout. All 28 tools remain.
+snapshot defaults to compact OCR and a 720px maximum display width; native input coordinates
+and geometry checks remain unchanged. Use compact=false and max_width=0 for full OCR fields
+and native image detail. Crop output preserves OCR IDs and native bounds, including partial
+lines that overlap the region. include_image=false is for read-only text extraction; inspect
+images before input and to verify effects. Image blocks are returned only in content, without
+a Base64 copy in structuredContent. Clients consuming the old structuredContent.result must migrate.
+
+The status/capabilities/geometry in snapshot are fresh, so normal operation can reuse them
+without an extra get_device_status call. Follow AGENTS.md's explicit checks for installation acceptance.
+wait_for(return_snapshot=true) returns its matched frame as a compact snapshot, including
+matched/condition/polls in the same metadata. Text waits reuse OCR; other conditions omit it.
+max_width/region affect the returned view, not the full-frame text predicate. A timeout adds
+no image or new snapshot ID, and a match alone does not mean animation has stopped.
 
 ## Phone system shortcuts
 

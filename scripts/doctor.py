@@ -30,9 +30,7 @@ async def diagnose():
                 devices = payload(await session.call_tool("list_devices", {}))["devices"]
                 report["checks"]["apiConnected"] = True
                 for index, device in enumerate(devices):
-                    stage = "device_status"
-                    status = payload(await session.call_tool("get_device_status", {"device_id": device["id"]}))
-                    item = {"index": index, "controlAvailable": status.get("control", {}).get("available", False),
+                    item = {"index": index, "controlAvailable": False,
                             "screenshot": False, "ocr": False}
                     report["devices"].append(item)
                     # Screenshot readiness is determined by the actual response, not guessed status fields.
@@ -41,11 +39,14 @@ async def diagnose():
                     if shot.isError:
                         continue
                     data = payload(shot)
+                    status = data["status"]
+                    item["controlAvailable"] = status.get("control", {}).get("available", False)
                     item["screenshot"] = any(c.type == "image" for c in shot.content)
-                    geometry = data["status"]["geometry"]
+                    geometry = status["geometry"]
                     item["dimensions"] = [geometry["width"], geometry["height"]]
                     stage = "ocr"
-                    ocr = await session.call_tool("snapshot", {"device_id": device["id"], "use_ocr": True})
+                    ocr = await session.call_tool("snapshot", {"device_id": device["id"],
+                                                               "use_ocr": True, "include_image": False})
                     if not ocr.isError:
                         item["ocr"] = True
                         item["ocrLanguage"] = payload(ocr)["ocr"].get("language")

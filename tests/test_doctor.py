@@ -35,11 +35,12 @@ class DoctorTests(unittest.IsolatedAsyncioTestCase):
                 calls.append(name)
                 if name == "list_devices":
                     return result({"devices": devices})
-                if name == "get_device_status":
-                    return result({"control": {"available": True}})
                 if args["use_ocr"]:
+                    if args.get("include_image") is not False:
+                        raise AssertionError("OCR diagnosis must not resend the image")
                     return result({"ocr": {"language": "en-US", "text": "private-screen-text"}}, error=not ocr)
-                return result({"status": {"geometry": {"width": 100, "height": 200}}},
+                return result({"status": {"geometry": {"width": 100, "height": 200},
+                                          "control": {"available": True}}},
                               error=not screenshot, image=screenshot)
 
         @asynccontextmanager
@@ -52,7 +53,9 @@ class DoctorTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(doctor, "stdio_client", stdio), patch.object(doctor, "ClientSession", session):
             report = await doctor.diagnose()
-        self.assertTrue(set(calls) <= {"list_devices", "get_device_status", "snapshot"})
+        self.assertTrue(set(calls) <= {"list_devices", "snapshot"})
+        if devices:
+            self.assertEqual(calls, ["list_devices", "snapshot"] + (["snapshot"] if screenshot else []))
         self.assertNotIn("private-", json.dumps(report))
         return report
 
@@ -73,6 +76,7 @@ class DoctorTests(unittest.IsolatedAsyncioTestCase):
         report = await self.diagnose([{"id": "private-id"}], ocr=True)
         self.assertTrue(report["ready"])
         self.assertTrue(report["devices"][0]["ocr"])
+        self.assertTrue(report["controlReady"])
 
     async def test_start_failure_redacts_exception(self):
         report = await self.diagnose([], fail=True)

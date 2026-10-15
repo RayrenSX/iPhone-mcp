@@ -100,3 +100,51 @@ class SetupTests(unittest.TestCase):
                         pass
             with SetupGate():
                 pass
+
+    def test_revision_wait_wakes_on_completion_and_terminal_reads_return_immediately(self):
+        release = threading.Event()
+        results = []
+        jobs = SetupJobs(lambda: (release.wait(3), Path('app'))[1])
+        with patch('iphonemirror_mcp.setup.SetupGate', return_value=nullcontext()):
+            first = jobs.begin(install_drivers=False)
+            reader = threading.Thread(target=lambda: results.append(jobs.status(first['jobId'], first['revision'], 20)))
+            reader.start()
+            try:
+                unchanged = jobs.status(first['jobId'], first['revision'], .02)
+                self.assertEqual(unchanged, first)
+                release.set()
+                reader.join(2)
+                self.assertFalse(reader.is_alive())
+                self.assertEqual(results[0]['state'], 'completed')
+                self.assertGreater(results[0]['revision'], first['revision'])
+                started = time.monotonic()
+                terminal = jobs.status(first['jobId'], results[0]['revision'], 20)
+                self.assertEqual(terminal, results[0])
+                self.assertLess(time.monotonic() - started, 1)
+                terminal['state'] = 'changed by caller'
+                self.assertEqual(jobs.status(first['jobId'])['state'], 'completed')
+            finally:
+                release.set()
+                reader.join(2)
+
+    def test_revision_wait_returns_human_action_and_unknown_jobs_fail(self):
+        release = threading.Event()
+        results = []
+        jobs = SetupJobs(lambda: (release.wait(3), Path('app'))[1])
+        with patch('iphonemirror_mcp.setup.SetupGate', return_value=nullcontext()), patch(
+            'iphonemirror_mcp.setup.driver_events', return_value=self.inventory(0)):
+            first = jobs.begin()
+            # Wait beyond the next revision to prove human/terminal states break the wait independently.
+            reader = threading.Thread(target=lambda: results.append(jobs.status(first['jobId'], 1000, 20)))
+            reader.start()
+            try:
+                release.set()
+                reader.join(2)
+                self.assertFalse(reader.is_alive())
+                self.assertEqual(results[0]['actionRequired'], 'connect_usb')
+                self.assertEqual(results[0]['state'], 'action_required')
+            finally:
+                release.set()
+                reader.join(2)
+        with self.assertRaisesRegex(RuntimeError, 'SETUP_JOB_NOT_FOUND'):
+            jobs.status('unknown', 0, 20)

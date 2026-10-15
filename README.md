@@ -81,11 +81,12 @@ codex mcp get iphone-mcp
 本机 Codex CLI 的只读测试可以截图、查询，控制工具因权限策略被拒绝；
 Full access 测试成功完成获取控制、点击、再次截图与释放。不需要在项目中保存模型 API 密钥。
 
-## 26 个工具
+## 28 个工具
 
 | 类别 | 工具 |
 |---|---|
 | 应用与窗口 | `start_iphonemirror`, `get_app_status`, `open_independent_window` |
+| 环境安装 | `prepare_iphone_environment`, `get_setup_status` |
 | 设备 | `list_devices`, `get_device_status` |
 | 图像与文字观察 | `screenshot`, `snapshot` |
 | 控制租约 | `acquire_control`, `release_control` |
@@ -94,8 +95,10 @@ Full access 测试成功完成获取控制、点击、再次截图与释放。�
 | 输入与剪贴板 | `press_key`, `press_shortcut`, `type_text`, `read_clipboard`, `write_clipboard` |
 | 等待 | `wait`, `wait_for` |
 
-推荐流程：`start_iphonemirror` → `list_devices` → `snapshot` → 检查能力/画面 → `acquire_control`
-→ 一次输入 → 等待界面稳定 → `snapshot` 验证 → `release_control`。
+推荐流程：`start_iphonemirror` → 使用返回的 `device_id` 取 `snapshot` → 检查能力/画面
+→ `acquire_control` → 一次输入 → 等待并观察结果 → `release_control`。
+多设备需要选择时调用 `list_devices`；快照已包含新鲜的状态、能力和几何，通常无需在同一次
+观察前再调用 `get_device_status`。安装验收仍按 AGENTS.md 单独执行规定的验证。
 
 MCP 握手和工具枚举不要求应用已打开或密钥已存在。调用 `start_iphonemirror` 后，
 主窗口保持隐藏，默认不打开独立窗口；唯一在线设备自动准备，多设备必须指定 `device_id`。
@@ -103,9 +106,20 @@ MCP 握手和工具枚举不要求应用已打开或密钥已存在。调用 `st
 先释放控制租约。`get_app_status` 可确认窗口/API 状态。关闭 MCP 连接不会结束独立窗口。
 运行包及完整对应源码见 [runtime-v0.2.1](https://github.com/RayrenSX/iPhone-mcp/releases/tag/runtime-v0.2.1)。
 
-`snapshot` 同时返回状态、OCR 文本框、截图与坐标变换；OCR 文本框不是 UI 可访问性节点。
-可以选择原始像素区域、显示宽度、文字标注与网格；OCR 在原始完整截图上执行。
+`snapshot` 同时返回完整状态、OCR 文本框、截图与坐标变换；OCR 文本框不是 UI 可访问性节点。
+默认图片宽度上限为 **720 像素**，不放大小图，按比例缩小；小字可用 `max_width=1080`，
+`max_width=0` 保留原始宽度。`screenshot` 仍返回原始 PNG。
+可以选择原始像素区域、文字标注与网格；OCR 在原始完整截图上执行，但裁剪时仅返回与
+区域有面积交集的文字框，保留原始 ID 和原生坐标。跨边界文字行仍可能包含裁剪区域外的文字。
 `click_element` 必须引用当前快照 ID 和文字框 ID，快照有效期 30 秒，点击前重新检查几何和文字位置。
+裁剪后未返回的文字框 ID 不能用于点击。
+
+默认 `compact=true`，OCR 每行只返回 `id/text/bounds`，坐标保留 1 位小数；服务端点击仍使用
+原始精度。全文可由逐行 `text` 拼接；`compact=false` 恢复 `ocr.text`、`center/source`、
+坐标公式等完整字段，裁剪时全文也仅拼接被保留的行。
+`include_image=false` 适合只读文字提取，不编码或传回图片；输入前后仍需观察真实画面。
+两种模式都会生成新快照 ID 并替换旧 ID。图片仅通过 MCP `content` 返回，
+不再在 `structuredContent.result` 中复制 Base64；依赖旧结构化字段的客户端应从 `content` 读取。
 
 所有触控使用原始截图像素（左上角原点）；`geometry_version` 来自 `status.geometry.version`。
 裁剪/缩放显示时，按 `imageTransform` 换算：
@@ -115,6 +129,15 @@ MCP 握手和工具枚举不要求应用已打开或密钥已存在。调用 `st
 `scroll` 的方向表示内容滚动方向：向下滚动时手指向上滑；距离为原始像素。
 `drag` 是连续触摸路径，不能保证 iOS 原生拖放语义。`type_at` 点击后粘贴，不自动清空字段或提交。
 `wait_for` 支持 OCR 文本出现/消失、图像变化以及在线/投屏/反控可用条件；不提供焦点或 enabled 语义。
+需要匹配后的画面时，传 `return_snapshot=true`，同一次返回图片以及含 `matched/condition/polls`
+的快照元数据，可以直接使用新 `snapshotId`。文字等待复用最后一帧和 OCR，其他条件省略 OCR；
+状态等待会截图并复核新帧状态。`max_width` 和 `region` 控制返回视图，文字匹配仍检查全屏。
+超时只返回 `matched=false` 等结果，不附图片和新快照 ID。匹配不代表动画已结束，需检查画面。
+默认 `return_snapshot=false` 保留原来的简短结果；等待本身不续租，也不自动重试错误。
+
+环境安装返回 `jobId/revision` 后，用 `get_setup_status(job_id, after_revision=revision, timeout=20)`
+等待变化，减少模型轮询；`timeout` 上限 30 秒，默认 0 表示立即查询。阶段进度改变、
+完成、失败或需要人工处理时返回最新版本；终态或 `action_required` 状态立即返回。
 
 输入前显式获取控制（5–300 秒，默认 30 秒），再次获取可续租，完成后释放。
 正常关闭服务会尝试释放；强制终止则由应用端 TTL 回收。用户可从主程序收回控制。

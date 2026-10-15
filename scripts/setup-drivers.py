@@ -1,7 +1,6 @@
 """Headless setup: JSON status on stdout, human actions belong to the caller."""
 import argparse
 import json
-import time
 
 from iphonemirror_mcp.runtime import RuntimeClient
 
@@ -19,6 +18,5 @@ while True:
         previous = serialized
     if status["state"] != "running":
         break
-    time.sleep(1)
-    status = jobs.status(status["jobId"])
+    status = jobs.status(status["jobId"], after_revision=status["revision"], timeout=20)
 raise SystemExit(0 if status["state"] == "completed" else 2)

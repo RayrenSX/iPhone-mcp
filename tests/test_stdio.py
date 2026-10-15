@@ -88,6 +88,63 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.http.server_close()
         self.thread.join(timeout=2)
 
+    async def test_snapshot_and_wait_images_are_not_duplicated_in_structured_content(self):
+        async with stdio_client(self.params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                tools = {tool.name: tool for tool in (await session.list_tools()).tools}
+                self.assertIsNone(tools["snapshot"].outputSchema)
+                self.assertIsNone(tools["wait_for"].outputSchema)
+                self.assertNotIn("title", tools["snapshot"].inputSchema)
+                self.assertNotIn("title", tools["tap"].inputSchema["properties"]["x"])
+                self.assertEqual(tools["tap"].inputSchema["properties"]["x"]["minimum"], 0)
+                self.assertEqual(tools["snapshot"].inputSchema["properties"]["max_width"]["default"], 720)
+                device = {"device_id": "usb:fixture"}
+                before = len(self.requests)
+                result = await session.call_tool("snapshot", {**device, "use_ocr": False})
+                self.assertFalse(result.isError)
+                self.assertEqual([item.type for item in result.content], ["text", "image"])
+                self.assertIsNone(result.structuredContent)
+                image = result.content[1]
+                self.assertEqual(result.model_dump_json().count(image.data), 1)
+                data = json.loads(result.content[0].text)
+                self.assertEqual(data["status"]["geometry"]["version"], "frame-1")
+                self.assertEqual([request[1].split("/")[-1] for request in self.requests[before:]],
+                                 ["status", "screenshot", "status"])
+
+                text_only = await session.call_tool("snapshot", {**device, "use_ocr": False,
+                                                                  "include_image": False, "compact": False})
+                self.assertFalse(text_only.isError)
+                self.assertEqual([item.type for item in text_only.content], ["text"])
+                self.assertIsNone(text_only.structuredContent)
+                self.assertIn("formula", json.loads(text_only.content[0].text)["imageTransform"])
+
+                matched = await session.call_tool("wait_for", {**device, "condition": "online",
+                                                               "return_snapshot": True, "max_width": 0})
+                self.assertFalse(matched.isError)
+                self.assertIsNone(matched.structuredContent)
+                self.assertEqual([item.type for item in matched.content], ["text", "image"])
+                data = json.loads(matched.content[0].text)
+                self.assertTrue(data["matched"])
+                self.assertNotEqual(data["snapshotId"], json.loads(text_only.content[0].text)["snapshotId"])
+                self.assertEqual(matched.model_dump_json().count(matched.content[1].data), 1)
+
+                unchanged = await session.call_tool("wait_for", {**device, "condition": "screen_changed",
+                                                                 "return_snapshot": True, "timeout": 0})
+                self.assertFalse(unchanged.isError)
+                self.assertEqual([item.type for item in unchanged.content], ["text"])
+                data = json.loads(unchanged.content[0].text)
+                self.assertFalse(data["matched"])
+                self.assertNotIn("snapshotId", data)
+
+                before = len(self.requests)
+                for args in ({**device, "max_width": -1}, {**device, "region": [0, 0, 1]}):
+                    invalid = await session.call_tool("snapshot", args)
+                    self.assertTrue(invalid.isError)
+                invalid_wait = await session.call_tool("get_setup_status", {"job_id": "unknown", "timeout": 31})
+                self.assertTrue(invalid_wait.isError)
+                self.assertEqual(len(self.requests), before)
+
     async def test_handshake_tools_images_input_and_errors(self):
         with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as errors:
             async with stdio_client(self.params, errlog=errors) as (read, write):

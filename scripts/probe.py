@@ -60,11 +60,12 @@ async def run(args):
                                 data = json.loads(content.text)
                             except ValueError:
                                 data = {"message": content.text}
-                            if tool == "snapshot" and not result.isError:
+                            if "snapshotId" in data and not result.isError:
                                 latest = data
                                 (output / f"{index:02d}-snapshot.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
                                 record["observation"] = {"geometry": data["status"]["geometry"],
-                                    "imageTransform": data["imageTransform"], "ocrText": data["ocr"].get("text", ""),
+                                    "imageTransform": data["imageTransform"],
+                                    "ocrText": data["ocr"].get("text", "\n".join(e["text"] for e in data["ocr"]["elements"])),
                                     "elements": len(data["ocr"]["elements"])}
                             else:
                                 record["result"] = data

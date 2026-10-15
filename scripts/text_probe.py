@@ -30,7 +30,7 @@ async def run(resume=False):
                 return result
 
             async def shot(name):
-                result = await call("snapshot", language="en-US", max_width=800)
+                result = await call("snapshot", language="en-US", max_width=800, compact=False)
                 metadata = json.loads(result.content[0].text)
                 for c in result.content:
                     if c.type == "image":

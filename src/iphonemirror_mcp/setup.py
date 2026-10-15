@@ -186,14 +186,18 @@ def driver_id(serial):
 class SetupJobs:
     def __init__(self, resolve):
         self.resolve = resolve
-        self.lock = threading.Lock()
+        self.lock = threading.Condition()
         self.jobs = {}
         self.active = None
 
-    def status(self, job_id):
+    def status(self, job_id, after_revision=None, timeout=0):
         with self.lock:
             if job_id not in self.jobs:
                 raise RuntimeError("SETUP_JOB_NOT_FOUND")
+            if after_revision is not None and timeout > 0:
+                self.lock.wait_for(lambda: self.jobs[job_id]["revision"] > after_revision
+                                   or self.jobs[job_id]["state"] != "running",
+                                   timeout=min(timeout, 30))
             return json.loads(json.dumps(self.jobs[job_id]))
 
     def begin(self, install_drivers=True, device_id=None, proxy=None):
@@ -207,12 +211,17 @@ class SetupJobs:
             job_id = uuid.uuid4().hex
             self.jobs[job_id] = {"jobId": job_id, "state": "running", "stage": "checking_runtime",
                                  "phoneReady": False, "driversReady": False,
-                                 "installDrivers": install_drivers, "actionRequired": None}
+                                 "installDrivers": install_drivers, "actionRequired": None,
+                                 "revision": 0}
             self.active = job_id
 
         def update(**values):
             with self.lock:
-                self.jobs[job_id].update(values)
+                job = self.jobs[job_id]
+                if any(job.get(k) != v for k, v in values.items()):
+                    job.update(values)
+                    job["revision"] += 1
+                    self.lock.notify_all()
 
         def perform():
             try:
