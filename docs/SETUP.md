@@ -12,6 +12,9 @@ Bootstrap installs missing Python using winget, downloads this repository's runt
 verifies SHA256SUMS.txt, and installs it under %LOCALAPPDATA%/iPhone-mcp/runtime/v0.2.1/app.
 It installs the MCP package, registers Codex, starts the background runtime and diagnoses real screenshots/OCR.
 The main window stays hidden. Older official runtimes lack background management: close them normally and rerun.
+Bootstrap/setup explicitly select continuous capture for compatibility with the published runtime;
+pass -CaptureMode on_demand with -MirrorPath pointing to a patched app to install in still-image mode.
+This installer choice does not change the MCP tool's on_demand default or a user's later selection.
 Complete corresponding native source and patch are provided with the release; see runtime-patches/README.md.
 
 Without Git, download the repository ZIP. Without winget, install Python and pass -Python <actual-executable>.
@@ -34,13 +37,23 @@ selects an existing compatible runtime. scripts/setup.ps1 can reuse that runtime
    configures MCP without driver installation. Keep the client connected until a terminal state.
 3. Input requires pairing/binding, iPhone Developer Mode and possible restart confirmation.
    The first DDI download needs network access. Finish reported prerequisites and retry.
-4. In a new Codex session call start_iphonemirror. A sole online device is prepared automatically;
-   with multiple devices select device_id from list_devices. For observation only pass enable_control=false.
-5. Check devicePrepared/actionRequired, then snapshot. To show a phone preview, release any control lease
+4. Install the [on-demand screenshot patch](../runtime-patches/README.md#on-demand-screenshots-and-direct-control)
+   for the default direct-control/still-image mode. The published runtime-v0.2.1 needs this supplemental patch;
+   bootstrap does not build it automatically. On an unpatched runtime explicitly use capture_mode=continuous
+   (scripts/start-runtime.py --mode continuous) for continuous video capture.
+5. In a new Codex session call start_iphonemirror. A sole online device is prepared automatically;
+   with multiple devices select device_id from list_devices. It defaults to capture_mode=on_demand
+   and enable_control=true: stop continuous capture, prepare direct control, and request individual screenshots.
+   Use capture_mode=continuous for frequent observations, animation tracking or a visible preview.
+   On-demand screenshots reuse the control transport and need Developer Mode/DDI even for observation.
+   enable_control=false changes readiness requirements, not the input lease requirement or an existing control channel.
+6. Check devicePrepared/actionRequired, then snapshot. To show a phone preview, release any control lease
    and call open_independent_window(device_id).
 
 MCP initialization and tool discovery work before the app starts or a key exists. start_iphonemirror
-starts the hidden app, enables local API, capture and reverse control without opening a preview.
+starts the hidden app, enables local API and prepares direct control plus on-demand screenshots without video capture.
+On-demand mode currently supports USB. capturing=false is expected when screenshot/control capabilities are true.
+An explicit preview switches back to continuous capture. Close that preview and release leases before switching to still images.
 get_app_status reports window/API state. The app and preview survive closing the MCP connection.
 Background startup does not permanently change the saved API-enabled preference.
 Physical connection, unlock/trust, Developer Mode restart and secure-desktop UAC may need the user.
@@ -58,10 +71,12 @@ status, real screenshots and OCR without sending phone input or printing identit
 Status is reused from the verified snapshot; the separate OCR check omits its image payload.
 ready=true proves a screenshot; controlReady reports input availability, not verified input effects.
 Exit code 2 means the API or device is not ready.
+start-runtime.py accepts --device-id for multiple devices, and exits 2 when selection/preparation is incomplete.
 
 | Symptom | Action |
 |---|---|
-| RUNTIME_NOT_INSTALLED / RUNTIME_UPGRADE_REQUIRED | Close old app normally and run bootstrap |
+| RUNTIME_NOT_INSTALLED | Run bootstrap, then install the on-demand patch |
+| RUNTIME_UPGRADE_REQUIRED | Apply the on-demand patch for the default mode; capture_mode=continuous selects continuous video |
 | BACKGROUND_START_FAILED | Check current-user desktop, local WMI, API port and app logs |
 | No online device | Connect, unlock and trust, then retry start_iphonemirror |
 | Multiple devices | Select device_id explicitly using list_devices |

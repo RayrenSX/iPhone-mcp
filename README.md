@@ -25,12 +25,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap.ps1
 
 脚本检测 Python，缺失时通过 winget 安装；没有运行中的兼容 iPhoneMirror 时，自动下载并
 校验本仓库 `runtime-v0.2.1` 后台运行包。随后安装 MCP 依赖、注册 Codex，
-通过 MCP 启动隐藏主窗口的应用、启用 API、准备投屏和反控，执行真实截图/OCR 诊断。
+通过 MCP 启动隐藏主窗口的应用、启用 API，执行真实截图/OCR 诊断。
 驱动安装改为命令行，AI 根据 `actionRequired` 提示连接、拔插 USB、解锁和管理员确认。
 健康驱动直接跳过；缺失或异常组件由原生安装器诊断、安装或修复。完成后调用
 `start_iphonemirror` 和 `snapshot` 验证。此流程需要包含 `driverSetupVersion: 1`
 的新版原生驱动程序，`runtime-v0.2.1` 包含此入口和手机系统动作 API。
 旧 runtime-v0.2.0 会返回升级要求，不打开 GUI。
+安装脚本默认显式选择 `continuous`，兼容发布的 `runtime-v0.2.1`；它尚不含按需截图补丁。
+MCP 工具默认使用按需截图模式，需先构建补丁运行包，再通过 `-MirrorPath <exe> -CaptureMode on_demand` 安装。
+直接对未打补丁的应用调用默认 MCP 启动会提示升级；AI 可按用户偏好显式选择 `capture_mode=continuous`。
 实测证据见 [无界面驱动安装验证](docs/HEADLESS_DRIVER_VALIDATION.md)。
 密钥留在当前用户 DPAPI，不写入 Codex 配置。
 详细参数、主程序获取和排错见 [自动配置指南](docs/SETUP.md)。
@@ -41,7 +44,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap.ps1
 
 - Python 3.11+；OCR 和本地密钥读取需要 Windows。
 - 本仓库后台运行包；`start_iphonemirror` 自动启用本地 Automation API（默认 `127.0.0.1:17890`）。
-- 已连接、信任的设备；MCP 自动准备投屏与反控，手机开发者模式等首次步骤仍需完成。
+- 已连接、信任的 USB 设备；MCP 默认准备直接控制与按需截图，手机开发者模式等首次步骤仍需完成。
 - Windows OCR 语言包；本机实测有 `en-US`、`zh-Hans-CN`。
 
 从本项目目录安装：
@@ -102,9 +105,16 @@ Full access 测试成功完成获取控制、点击、再次截图与释放。�
 
 MCP 握手和工具枚举不要求应用已打开或密钥已存在。调用 `start_iphonemirror` 后，
 主窗口保持隐藏，默认不打开独立窗口；唯一在线设备自动准备，多设备必须指定 `device_id`。
-只观察可传 `enable_control=false`。需要可见画面时调用 `open_independent_window(device_id)`；
+默认 `capture_mode=on_demand`，停止该设备的持续视频采集，通过控制通道请求单张截图，保留触控、键盘与系统动作。
+此模式需要应用 [按需截图运行时补丁](runtime-patches/README.md#on-demand-screenshots-and-direct-control)，
+当前 `runtime-v0.2.1` 下载包本身尚未包含；旧运行包会明确返回升级要求，不自动退回持续采集。
+需要连续视频帧时传 `capture_mode=continuous`；只观察可传 `enable_control=false`。
+按需截图复用设备控制连接，因此也需要开发者模式和 DDI；`enable_control=false` 不关闭已有控制通道，输入仍需租约。
+需要可见画面时调用 `open_independent_window(device_id)`，它会切换到持续采集；
 先释放控制租约。`get_app_status` 可确认窗口/API 状态。关闭 MCP 连接不会结束独立窗口。
 运行包及完整对应源码见 [runtime-v0.2.1](https://github.com/RayrenSX/iPhone-mcp/releases/tag/runtime-v0.2.1)。
+
+屏幕观察模式和选择规则见[模式对照](docs/CAPTURE_MODES.md)。AI 通过 `start_iphonemirror` 的 `capture_mode` 参数选择 `on_demand` 或 `continuous`：前者默认按需截图、资源占用低，后者保留实时帧、适合高频观察和预览。
 
 `snapshot` 同时返回完整状态、OCR 文本框、截图与坐标变换；OCR 文本框不是 UI 可访问性节点。
 默认图片宽度上限为 **720 像素**，不放大小图，按比例缩小；小字可用 `max_width=1080`，

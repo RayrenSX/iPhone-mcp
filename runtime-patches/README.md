@@ -1,5 +1,57 @@
 # Background device runtime source
 
+## On-demand screenshots and direct control
+
+The current MCP defaults to `capture_mode=on_demand`, while `enable_control=true`
+continues to prepare phone input. `iphonemirror-ondemand.patch` applies to the complete
+runtime-v0.2.1 corresponding source (including management, shortcuts and driver setup).
+The published runtime-v0.2.1 does not include this supplemental patch. An unpatched app
+returns `RUNTIME_UPGRADE_REQUIRED`; the MCP does not silently start video capture.
+`capture_mode=continuous` explicitly selects the continuous mode.
+
+This patch stops the selected device's video session, prepares its existing USB control
+transport, and requests each PNG through the device's Instruments screenshot service.
+It does not briefly start video to take screenshots. It requires a trusted/unlocked USB
+phone, Developer Mode and matching DDI. It reports `capturing=false` alongside screenshot
+and control capabilities. A screenshot-capable bridge is required even when
+`enable_control=false`; no phone input is sent by startup or screenshots.
+
+Screenshot dimensions define the native pixel coordinates. Before a touch operation,
+the runtime takes a still image to check geometry again; changed geometry rejects input.
+It retains the control lease, cancellation and session-generation guards. Screenshot RPC
+responses are excluded from diagnostic logs. A visible preview explicitly switches back
+to continuous capture; close it and release the lease before requesting still-image mode.
+Wireless/AirPlay still uses the explicit legacy mode.
+
+To build, extract the complete runtime-v0.2.1 source and select a complete working
+app installation as the base runtime (including the native Core/USB DLLs and bridge payload).
+The build rejects an incomplete payload before changing the source. Use Windows x64,
+.NET SDK 10.0.301 and a dedicated Python 3.13 build
+environment. The script applies the patch (or checks that it is already applied), copies
+`ondemand_screenshot.py`, installs the pinned bridge build dependencies in the supplied
+Python environment, builds both the bridge and app, regenerates the bridge integrity
+manifest, and runs the native API tests. It keeps the base runtime intact.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-ondemand-runtime.ps1 `
+  -SourcePath C:/build/runtime-source `
+  -BaseRuntimePath C:/build/runtime/app `
+  -Python C:/build/python/Scripts/python.exe `
+  -OutputPath C:/build/ondemand-runtime
+```
+
+Close the previous app normally, then run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1 `
+  -MirrorPath C:/build/ondemand-runtime/app/iPhoneMirror.exe -CaptureMode on_demand
+```
+
+Refresh MCP or open a new session to load the new startup argument/default. Verify
+`start_iphonemirror`, `get_device_status` and a fresh `snapshot`; the expected state is
+`capturing=false`, screenshot capability true and control available. The screenshot
+and lease checks alone do not verify the phone's response to input.
+
 The MCP management tools require the runtime distributed in this repository's
 `runtime-v0.2.0` Release. The earlier upstream v1.8.5-pre2 app does not have these
 management endpoints or background startup behavior.

@@ -22,8 +22,13 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
-                names = {tool.name for tool in (await session.list_tools()).tools}
+                tools = {tool.name: tool for tool in (await session.list_tools()).tools}
+                names = set(tools)
                 self.assertTrue({"start_iphonemirror", "get_app_status", "open_independent_window"} <= names)
+                properties = tools["start_iphonemirror"].inputSchema["properties"]
+                self.assertEqual(properties["capture_mode"]["default"], "on_demand")
+                self.assertEqual(properties["capture_mode"]["enum"], ["on_demand", "continuous"])
+                self.assertIs(properties["enable_control"]["default"], True)
 
     async def asyncSetUp(self):
         self.requests = []

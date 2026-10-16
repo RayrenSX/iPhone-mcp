@@ -1,0 +1,488 @@
+diff --git a/src/App/Automation/AutomationApiHost.cs b/src/App/Automation/AutomationApiHost.cs
+--- a/src/App/Automation/AutomationApiHost.cs
++++ b/src/App/Automation/AutomationApiHost.cs
+@@ -135,7 +135,7 @@
+                 Permission("device.control", "screen.capture");
+                 var request = await ReadAsync<PrepareRequest>(c);
+                 if (management is null) throw new AutomationException("UNSUPPORTED_RUNTIME", "Application management is unavailable.", 501);
+-                return Results.Json(await management("prepare", id, request.EnableControl, c.RequestAborted));
++                return Results.Json(await management(request.ContinuousCapture ? "prepare" : "prepareOnDemand", id, request.EnableControl, c.RequestAborted));
+             });
+             app.MapPost("/api/v1/devices/{id}/window/open", async (string id, HttpContext c) =>
+             {
+@@ -244,7 +244,7 @@
+         await context.Response.WriteAsJsonAsync(new { error = new { code = error.Code, message = error.Message }, requestId = context.TraceIdentifier }, context.RequestAborted);
+     }
+     private sealed record AcquireRequest(int DurationSeconds = 30);
+-    private sealed record PrepareRequest(bool EnableControl = true);
++    private sealed record PrepareRequest(bool EnableControl = true, bool ContinuousCapture = false);
+     private sealed record TextRequest(string? Text);
+     private sealed class TokenBucket(int rate, int burst)
+     {
+diff --git a/src/App/MainWindow.AutomationManagement.cs b/src/App/MainWindow.AutomationManagement.cs
+--- a/src/App/MainWindow.AutomationManagement.cs
++++ b/src/App/MainWindow.AutomationManagement.cs
+@@ -30,7 +30,7 @@
+ 
+     private async Task<object> ManageAutomationUiAsync(string action, string? id, bool enableControl, CancellationToken cancellation)
+     {
+-        if (action == "status") return new { managementVersion = 1, background = (Application.Current as App)?.AutomationBackground == true,
++        if (action == "status") return new { managementVersion = 1, onDemandCaptureVersion = 1, background = (Application.Current as App)?.AutomationBackground == true,
+             mainWindowVisible = IsVisible, apiRunning = AutomationRunning, independentWindowOpen = _secondaryMirrors.HasAnyOpen };
+         if (!await _automationManagementGate.WaitAsync(0, cancellation))
+             throw new AutomationException("MANAGEMENT_BUSY", "Another device preparation is active.");
+@@ -44,10 +44,24 @@
+             cancellation.ThrowIfCancellationRequested();
+             if (action == "window")
+             {
++                var restoreControl = await _viewModel.UseAutomationContinuousCaptureAsync(device.Udid);
+                 var result = await _secondaryMirrors.ShowAsync(device);
+                 if (!result.Success) throw new AutomationException("DEVICE_NOT_READY", result.Message);
++                if (restoreControl)
++                    await _viewModel.StartAutomationControlAsync(device.Udid, device.IsWireless, cancellation);
+                 return new { opened = _secondaryMirrors.IsOpen(device), mainWindowVisible = IsVisible };
+             }
++            if (action == "prepareOnDemand")
++            {
++                if (_secondaryMirrors.IsOpen(device))
++                    throw new AutomationException("WINDOW_OPEN", "Close this device's preview before switching to on-demand capture.");
++                await _viewModel.PrepareAutomationOnDemandAsync(device, cancellation);
++                var readyTarget = await ((IAutomationBackend)_viewModel).ResolveAsync(id!, cancellation);
++                return new { capturing = readyTarget.Device.Capturing, captureMode = "on_demand",
++                    screenshotAvailable = readyTarget.Device.Capabilities.Screenshot,
++                    controlAvailable = readyTarget.Device.ControlAvailable, mainWindowVisible = IsVisible };
++            }
++            await _viewModel.UseAutomationContinuousCaptureAsync(device.Udid);
+             var started = await _viewModel.StartBackgroundSessionAsync(device);
+             if (!started.Success) throw new AutomationException("DEVICE_NOT_READY", started.Message);
+             var backend = (IAutomationBackend)_viewModel;
+diff --git a/src/App/Services/Automation/AutomationContracts.cs b/src/App/Services/Automation/AutomationContracts.cs
+--- a/src/App/Services/Automation/AutomationContracts.cs
++++ b/src/App/Services/Automation/AutomationContracts.cs
+@@ -27,6 +27,7 @@
+ {
+     internal Func<bool>? HardwareBusy { get; init; }
+     internal Func<bool>? SessionCurrent { get; init; }
++    internal Func<CancellationToken, Task<byte[]>>? CapturePng { get; init; }
+ }
+ 
+ // Adapts the application's existing managers. It must never discover/connect a
+diff --git a/src/App/Services/Automation/AutomationService.cs b/src/App/Services/Automation/AutomationService.cs
+--- a/src/App/Services/Automation/AutomationService.cs
++++ b/src/App/Services/Automation/AutomationService.cs
+@@ -71,9 +71,20 @@
+         bool Current() => ownership.IsCurrent(lease) && target.IsCurrent();
+         try
+         {
+-            if (!Current()) throw new OperationCanceledException();
+             if (lease.Touch is not null && action != "touch-up")
+                 throw new AutomationException("CONTROL_LOCKED", "Release the active touch before another operation.");
++            // The admitted operation owns this geometry refresh. Rotation
++            // invalidates its coordinates before any touch is dispatched.
++            if (target.CapturePng is not null && action is "tap" or "long-press" or "swipe" or "touch-path" or "touch-down")
++            {
++                // Do not coalesce with a snapshot that began before this input.
++                await target.CapturePng(ct);
++                target = await backend.ResolveAsync(id, ct);
++                if (target.Device.Geometry.Version != lease.Target.Device.Geometry.Version ||
++                    (request.GeometryVersion is not null && request.GeometryVersion != target.Device.Geometry.Version))
++                    throw new AutomationException("GEOMETRY_CHANGED", "Refresh device geometry and acquire a new control session.");
++            }
++            if (!Current()) throw new OperationCanceledException();
+             if (action == "key")
+             {
+                 Supported(target.Device.Capabilities.Keyboard);
+@@ -208,6 +219,7 @@
+             throw new AutomationException("RATE_LIMITED", "Screenshot encoders are busy.", 429);
+         try
+         {
++            if (target.CapturePng is not null) return await target.CapturePng(_stop.Token);
+             var frame = await target.Capture(_stop.Token) ?? throw new AutomationException("SCREENSHOT_UNAVAILABLE", "No device frame is available.", 503);
+             return await Task.Run(() => ScreenshotService.EncodePng(frame), _stop.Token);
+         }
+diff --git a/src/App/Services/DirectUsbInputBridge.Automation.cs b/src/App/Services/DirectUsbInputBridge.Automation.cs
+--- a/src/App/Services/DirectUsbInputBridge.Automation.cs
++++ b/src/App/Services/DirectUsbInputBridge.Automation.cs
+@@ -7,6 +7,7 @@
+ public sealed partial class DirectUsbInputBridge
+ {
+     internal bool SupportsAutomationClipboard { get; private set; }
++    internal bool SupportsAutomationScreenshot { get; private set; }
+     internal Func<IDisposable>? InputAdmission { get; set; }
+     internal bool InputWritePending => _sendLock.CurrentCount == 0;
+     private readonly SemaphoreSlim _clipboardRequestGate = new(1, 1);
+@@ -19,15 +20,17 @@
+         if (!root.TryGetProperty("generation", out var gen) || gen.GetInt64() != pending.Generation) return;
+         if (root.TryGetProperty("success", out var success) && success.ValueKind == JsonValueKind.True)
+             pending.Result.TrySetResult(root.TryGetProperty("text", out var text) ? text.GetString() : null);
+-        else pending.Result.TrySetException(new AutomationException("CLIPBOARD_UNAVAILABLE", "The device clipboard operation failed or was cancelled.", 503));
++        else pending.Result.TrySetException(root.TryGetProperty("event", out var responseEvent) && responseEvent.GetString() == "screenshot_result"
++            ? new AutomationException("SCREENSHOT_UNAVAILABLE", "The device screenshot failed or was cancelled.", 503)
++            : new AutomationException("CLIPBOARD_UNAVAILABLE", "The device clipboard operation failed or was cancelled.", 503));
+     }
+ 
+     internal async Task<string?> AutomationClipboardAsync(string kind, string? text, Func<bool> current,
+         CancellationToken cancellation)
+     {
+-        if (!SupportsAutomationClipboard)
++        if (kind == "screenshot" ? !SupportsAutomationScreenshot : !SupportsAutomationClipboard)
+             throw new AutomationException("CAPABILITY_NOT_SUPPORTED", "The installed bridge does not support clipboard requests.", 422);
+-        if (kind is not ("read_clipboard" or "write_clipboard" or "paste_text")) throw new ArgumentException(nameof(kind));
++        if (kind is not ("read_clipboard" or "write_clipboard" or "paste_text" or "screenshot")) throw new ArgumentException(nameof(kind));
+         if (!await _clipboardRequestGate.WaitAsync(0, cancellation))
+             throw new AutomationException("CONTROL_LOCKED", "Another clipboard request is in progress.");
+         var id = Guid.NewGuid().ToString("N");
+@@ -39,7 +42,7 @@
+         IDisposable? inputAdmission = null;
+         try
+         {
+-            inputAdmission = kind == "read_clipboard" ? null : InputAdmission?.Invoke();
++            inputAdmission = kind is "read_clipboard" or "screenshot" ? null : InputAdmission?.Invoke();
+             await _sendLock.WaitAsync(cancellation);
+             try
+             {
+@@ -53,7 +56,7 @@
+                 }), cancellation);
+             }
+             finally { _sendLock.Release(); }
+-            return await result.Task.WaitAsync(TimeSpan.FromSeconds(15), cancellation);
++            return await result.Task.WaitAsync(TimeSpan.FromSeconds(kind == "screenshot" ? 25 : 15), cancellation);
+         }
+         catch (Exception) when (sent && !result.Task.IsCompleted)
+         {
+@@ -65,7 +68,7 @@
+                 {
+                     if (IsReady && generation == InputGeneration)
+                         await WriteFrameAsync(JsonSerializer.SerializeToUtf8Bytes(new
+-                        { schema = CoreDeviceTouchProtocol.MessageSchema, kind = "cancel_clipboard", requestId = id, generation = wireGeneration, seq = NextSequence() }), cleanup.Token);
++                        { schema = CoreDeviceTouchProtocol.MessageSchema, kind = kind == "screenshot" ? "cancel_screenshot" : "cancel_clipboard", requestId = id, generation = wireGeneration, seq = NextSequence() }), cleanup.Token);
+                 }
+                 finally { _sendLock.Release(); }
+                 try { await result.Task.WaitAsync(cleanup.Token); }
+diff --git a/src/App/Services/DirectUsbInputBridge.cs b/src/App/Services/DirectUsbInputBridge.cs
+--- a/src/App/Services/DirectUsbInputBridge.cs
++++ b/src/App/Services/DirectUsbInputBridge.cs
+@@ -456,10 +456,11 @@
+             using var doc = JsonDocument.Parse(line);
+             var root = doc.RootElement;
+             var evt = root.GetProperty("event").GetString();
+-            if (evt is not ("clipboard_text" or "clipboard_result")) _lastDiagnostic = line;
++            if (evt is not ("clipboard_text" or "clipboard_result" or "screenshot_result")) _lastDiagnostic = line;
+             switch (evt)
+             {
+                 case "clipboard_result":
++                case "screenshot_result":
+                     CompleteAutomationClipboard(root);
+                     break;
+                 case "capture_mux_checkpoint":
+@@ -505,6 +506,9 @@
+                     SupportsAutomationClipboard = root.TryGetProperty("capabilities", out var caps) &&
+                         caps.ValueKind == JsonValueKind.Array && caps.EnumerateArray().Any(c =>
+                             c.ValueKind == JsonValueKind.String && c.GetString() == "iphoneMirror.clipboard.rpc.v1");
++                    SupportsAutomationScreenshot = root.TryGetProperty("capabilities", out var screenshotCaps) &&
++                        screenshotCaps.ValueKind == JsonValueKind.Array && screenshotCaps.EnumerateArray().Any(c =>
++                            c.ValueKind == JsonValueKind.String && c.GetString() == "iphoneMirror.screenshot.rpc.v1");
+                     Udid = readyUdid;
+                     RateHz = root.TryGetProperty("rateHz", out var r) ? r.GetInt32() : 0;
+                     GateOpen = root.TryGetProperty("gateOpen", out var g) && g.GetBoolean();
+diff --git a/src/App/Services/UsbTouchBridgeHost.cs b/src/App/Services/UsbTouchBridgeHost.cs
+--- a/src/App/Services/UsbTouchBridgeHost.cs
++++ b/src/App/Services/UsbTouchBridgeHost.cs
+@@ -38,6 +38,12 @@
+ 
+     internal bool IsReady => _bridge.IsReady;
+     internal bool SupportsAutomationClipboard => _bridge.SupportsAutomationClipboard;
++    internal bool SupportsAutomationScreenshot => _bridge.SupportsAutomationScreenshot;
++    internal async Task<byte[]> AutomationScreenshotAsync(Func<bool> current, CancellationToken cancellation)
++    {
++        var text = await _bridge.AutomationClipboardAsync("screenshot", null, current, cancellation);
++        return Convert.FromBase64String(text ?? throw new InvalidOperationException("No screenshot returned."));
++    }
+     internal Func<IDisposable>? InputAdmission { set => _bridge.InputAdmission = value; }
+     internal bool InputWritePending => _bridge.InputWritePending;
+     internal Task<string?> AutomationClipboardAsync(string kind, string? text, Func<bool> current,
+diff --git a/src/App/ViewModels/MainViewModel.Automation.cs b/src/App/ViewModels/MainViewModel.Automation.cs
+--- a/src/App/ViewModels/MainViewModel.Automation.cs
++++ b/src/App/ViewModels/MainViewModel.Automation.cs
+@@ -11,6 +11,72 @@
+     internal DeviceInputService DeviceInput { get; } = new();
+     internal AutomationOwnership AutomationOwnership { get; } = new();
+     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (uint Width, uint Height)> _automationGeometry = new(StringComparer.OrdinalIgnoreCase);
++    private readonly HashSet<string> _automationOnDemand = new(StringComparer.OrdinalIgnoreCase);
++    private readonly Dictionary<string, (uint Width, uint Height, UsbTouchBridgeHost Bridge, long Generation)> _automationStillGeometry = new(StringComparer.OrdinalIgnoreCase);
++
++    internal async Task<byte[]> CaptureAutomationStillAsync(string source, CancellationToken cancellation,
++        UsbTouchBridgeHost? expectedBridge = null)
++    {
++        var bridge = await AutomationUiAsync(() =>
++        {
++            if (!_automationOnDemand.Contains(source) || _sessions.Get(source)?.Handle is not null)
++                throw new AutomationException("GEOMETRY_CHANGED", "The capture mode changed; request a fresh snapshot.");
++            var current = GetReadyUsbControlBridge(source);
++            if (expectedBridge is not null && !ReferenceEquals(current, expectedBridge))
++                throw new AutomationException("DEVICE_NOT_CONNECTED", "Screenshot transport changed.", 503);
++            return current;
++        }, cancellation)
++            ?? throw new AutomationException("CONTROL_NOT_AVAILABLE", "Prepare the device screenshot transport first.", 503);
++        var generation = bridge.InputGeneration;
++        var png = await bridge.AutomationScreenshotAsync(() => bridge.IsReady && bridge.InputGeneration == generation, cancellation);
++        // PNG IHDR is the authoritative coordinate space, independent of a video session.
++        if (png.Length < 33 || !png.AsSpan(0, 8).SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }))
++            throw new AutomationException("SCREENSHOT_UNAVAILABLE", "The device did not return a PNG.", 503);
++        var width = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(png.AsSpan(16, 4));
++        var height = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(png.AsSpan(20, 4));
++        if (width is 0 or > 16384 || height is 0 or > 16384)
++            throw new AutomationException("SCREENSHOT_UNAVAILABLE", "Invalid screenshot dimensions.", 503);
++        await AutomationUiAsync(() =>
++        {
++            if (!_automationOnDemand.Contains(source) || _sessions.Get(source)?.Handle is not null ||
++                !ReferenceEquals(GetReadyUsbControlBridge(source), bridge) || bridge.InputGeneration != generation)
++                throw new AutomationException("DEVICE_NOT_CONNECTED", "Screenshot transport changed.", 503);
++            _automationStillGeometry[source] = (width, height, bridge, generation);
++            ObserveAutomationGeometry(source, width, height);
++            return true;
++        }, cancellation);
++        return png;
++    }
++
++    internal async Task PrepareAutomationOnDemandAsync(DeviceViewModel device, CancellationToken cancellation)
++    {
++        if (device.IsWireless)
++            throw new AutomationException("CAPABILITY_NOT_SUPPORTED", "On-demand screenshots currently require USB.", 422);
++        await StopDeviceSessionAsync(device.Udid);
++        _automationOnDemand.Add(device.Udid);
++        _automationStillGeometry.Remove(device.Udid);
++        if (GetReadyUsbControlBridge(device.Udid) is null)
++            await StartAutomationControlAsync(device.Udid, false, cancellation);
++        var bridge = GetReadyUsbControlBridge(device.Udid);
++        if (bridge?.SupportsAutomationScreenshot != true)
++            throw new AutomationException("SCREENSHOT_UNAVAILABLE", "Prepare a screenshot-capable control bridge; check trust, Developer Mode and DDI.", 503);
++        await CaptureAutomationStillAsync(device.Udid, cancellation);
++    }
++
++    internal async Task<bool> UseAutomationContinuousCaptureAsync(string source)
++    {
++        var restoreControl = false;
++        if (_automationOnDemand.Contains(source))
++        {
++            restoreControl = GetReadyUsbControlBridge(source) is not null;
++            // USB video startup changes the device configuration. Retire the
++            // standalone control claim before creating the capture session.
++            await DisableWiredControlForCaptureTeardownAsync(source);
++        }
++        _automationOnDemand.Remove(source);
++        _automationStillGeometry.Remove(source);
++        return restoreControl;
++    }
+     internal void ObserveAutomationGeometry(string source, uint width, uint height) => _automationGeometry[source] = (width, height);
+     internal Func<string, bool>? AutomationHumanInputBusy { get; set; }
+     internal void ConfigureAutomationInputAdmission() => _bluetoothControl.InputAdmission = () =>
+@@ -74,6 +140,10 @@
+             var sameCapture = ReferenceEquals(_sessions.Get(device.Udid)?.Handle, native);
+             var width = sameCapture ? status?.Width ?? 0 : 0;
+             var height = sameCapture ? status?.Height ?? 0 : 0;
++            var onDemand = _automationOnDemand.Contains(device.Udid);
++            if (onDemand && bridge is not null && _automationStillGeometry.TryGetValue(device.Udid, out var still) &&
++                ReferenceEquals(still.Bridge, bridge) && still.Generation == bridge.InputGeneration)
++                (width, height) = (still.Width, still.Height);
+             ObserveAutomationGeometry(device.Udid, width, height);
+             var portrait = AppliedBluetoothPortraitMouseDirection;
+             var landscape = AppliedBluetoothLandscapeMouseDirection;
+@@ -81,12 +151,12 @@
+             var reverseY = AppliedBluetoothMouseReverseVertical;
+             var generation = control?.Router.Generation ?? keyboard?.Generation ?? 0;
+             var geometry = new AutomationGeometry(width, height,
+-                $"{native?.RawHandle ?? 0:x}:{width}:{height}:{(int)portrait}:{(int)landscape}:{reverseX}:{reverseY}");
++                $"{(onDemand ? "still" : "video")}:{native?.RawHandle ?? 0:x}:{width}:{height}:{(onDemand ? bridge?.InputGeneration ?? 0 : 0)}:{(onDemand ? generation : 0)}:{(int)portrait}:{(int)landscape}:{reverseX}:{reverseY}");
+             var binding = _identityResolver.ResolveControlBinding(device,
+                 bridge is not null ? (control?.WiredEnabled == true ? ReverseControlMode.Usb : ReverseControlMode.Wireless) : ReverseControlMode.Bluetooth);
+             bool Current() => !_disposed && keyboard?.IsCurrent() == true &&
+-                (native is null || (ReferenceEquals(_sessions.Get(device.Udid)?.Handle, native) &&
+-                    _automationGeometry.TryGetValue(device.Udid, out var size) && size == (width, height))) &&
++                ReferenceEquals(_sessions.Get(device.Udid)?.Handle, native) &&
++                _automationGeometry.TryGetValue(device.Udid, out var size) && size == (width, height) &&
+                 portrait == AppliedBluetoothPortraitMouseDirection && landscape == AppliedBluetoothLandscapeMouseDirection &&
+                 reverseX == AppliedBluetoothMouseReverseHorizontal && reverseY == AppliedBluetoothMouseReverseVertical &&
+                 (control is null || control.Router.Generation == generation) &&
+@@ -101,7 +171,7 @@
+                 device.IsWireless ? "airplay" : "usb", online, keyboard is not null && binding is not null,
+                 profile?.Id, keyboard?.Transport, capturing, geometry,
+                 new(touching, touching, touching, touching, touching, touching, keyboard is not null,
+-                    clipboard, clipboard, clipboard, capturing && width > 0 && height > 0)
++                    clipboard, clipboard, clipboard, onDemand ? bridge?.SupportsAutomationScreenshot == true : capturing && width > 0 && height > 0)
+                 { Shortcuts = DeviceSystemShortcuts.Supported(keyboard) });
+             // Capture the route on its owner thread. Workers use only the guarded
+             // delegates, never enumerate WPF collections to choose a target.
+@@ -122,6 +192,7 @@
+                     var frame = _core.GetDeviceOutputFrame(native, 0, 0, owned: true);
+                     return ReferenceEquals(_sessions.Get(device.Udid)?.Handle, native) ? frame : null;
+                 }, token)) { SessionCurrent = () => keyboard?.IsCurrent() == true,
++                    CapturePng = onDemand ? token => CaptureAutomationStillAsync(device.Udid, token, bridge) : null,
+                     HardwareBusy = () => bridge?.InputWritePending == true ||
+                     (keyboard is not null && DeviceInput.KeyboardGate(keyboard).CurrentCount == 0) ||
+                     (bridge is null && _bluetoothControl.HasPendingInput) };
+diff --git a/src/App.Runtime.Tests/AutomationApiTests.cs b/src/App.Runtime.Tests/AutomationApiTests.cs
+--- a/src/App.Runtime.Tests/AutomationApiTests.cs
++++ b/src/App.Runtime.Tests/AutomationApiTests.cs
+@@ -141,6 +141,7 @@
+         await TestAutomationClipboardCorrelationAsync();
+         await TestAutomationLeaseRecoveryAsync();
+         await TestAutomationScreenshotSharingAsync();
++        await TestAutomationOnDemandAsync();
+         TestAutomationKeyPersistence();
+         var owner = new AutomationOwnership();
+         var backend = new AutomationTestBackend(owner);
+@@ -352,6 +353,59 @@
+         if (owner.Snapshot().Length != 0) throw new InvalidOperationException("Server stop leaked a late lease.");
+     }
+ 
++    private static async Task TestAutomationOnDemandAsync()
++    {
++        var owner = new AutomationOwnership();
++        var backend = new AutomationTestBackend(owner) { Capturing = false };
++        await using var service = new AutomationService(backend, owner, new DeviceInputService());
++        service.Start();
++        var count = 0;
++        byte[] png = [137, 80, 78, 71, 13, 10, 26, 10];
++        backend.StillScreenshot = _ => { count++; return Task.FromResult(png); };
++        backend.CaptureFrame = (_, _) => throw new InvalidOperationException("Video capture must not be read.");
++        if (!(await service.ScreenshotAsync("a", default)).SequenceEqual(png) || count != 1)
++            throw new InvalidOperationException("On-demand PNG was not returned without video capture.");
++        await service.AcquireAsync("a", "client", null, 30, default);
++        var lease = owner.Snapshot().Single();
++        backend.StillScreenshot = _ => { backend.Geometry++; return Task.FromResult(png); };
++        try
++        {
++            await service.InputAsync("a", "client", lease.Token, "tap", new() { X = 10, Y = 20 }, default);
++            throw new InvalidOperationException("Rotation after a still screenshot accepted stale coordinates.");
++        }
++        catch (AutomationException e) when (e.Code == "GEOMETRY_CHANGED") { }
++        if (!backend.Events.IsEmpty) throw new InvalidOperationException("Stale geometry dispatched phone input.");
++        await service.RevokeAllAsync();
++
++        // A snapshot already in flight must never satisfy the geometry refresh
++        // for a later input. Only the new request reveals the rotation.
++        backend.Events.Clear();
++        var pending = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
++        var began = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
++        var stillCalls = 0;
++        backend.StillScreenshot = _ =>
++        {
++            if (++stillCalls == 1) { began.SetResult(); return pending.Task; }
++            backend.Geometry++;
++            return Task.FromResult(png);
++        };
++        await service.AcquireAsync("a", "client", null, 30, default);
++        lease = owner.Snapshot().Single();
++        var snapshot = service.ScreenshotAsync("a", default);
++        await began.Task;
++        try
++        {
++            var tap = service.InputAsync("a", "client", lease.Token, "tap", new() { X = 10, Y = 20 }, default);
++            await tap.WaitAsync(TimeSpan.FromSeconds(2));
++            throw new InvalidOperationException("Touch reused an earlier snapshot instead of checking new geometry.");
++        }
++        catch (AutomationException e) when (e.Code == "GEOMETRY_CHANGED") { }
++        finally { pending.TrySetResult(png); await snapshot; }
++        if (stillCalls != 2 || !backend.Events.IsEmpty)
++            throw new InvalidOperationException("Touch did not independently verify screenshot geometry.");
++        await service.RevokeAllAsync();
++    }
++
+     private static async Task TestAutomationScreenshotSharingAsync()
+     {
+         var owner = new AutomationOwnership();
+@@ -474,9 +528,10 @@
+ 
+     private sealed class AutomationTestBackend(AutomationOwnership ownership) : IAutomationBackend
+     {
+-        internal bool Online = true, Supported = true, HumanBusy, FailUp;
++        internal bool Online = true, Supported = true, HumanBusy, FailUp, Capturing = true;
+         internal int Geometry = 1, Generation = 1;
+         internal Func<string, CancellationToken, Task<VideoFrame?>>? CaptureFrame;
++        internal Func<CancellationToken, Task<byte[]>>? StillScreenshot;
+         internal Func<Task>? BeforeReserve;
+         internal string ClipboardText = "initial";
+         internal readonly ConcurrentQueue<string> Events = new();
+@@ -511,7 +566,7 @@
+                     return Task.CompletedTask;
+                 });
+             var device = new AutomationDevice(id, "Test phone", "iPhone", "26", "usb", Online, true, null,
+-                "WiredDirect", true, new(100, 200, geometry + ":" + generation), new(Supported, Supported, Supported, Supported,
++                "WiredDirect", Capturing, new(100, 200, geometry + ":" + generation), new(Supported, Supported, Supported, Supported,
+                     Supported, Supported, Supported, Supported, Supported, Supported, Supported) { Shortcuts = DeviceSystemShortcuts.Supported(keyboard) });
+             return Task.FromResult(new AutomationTarget(device, id, physical, () => SessionCurrent() && geometry == Geometry, p => p,
+                 guard => new(id, guard, Send, (x, y) => (x, y)), keyboard,
+@@ -522,7 +577,7 @@
+                     if (kind == "paste_text") Events.Enqueue("paste");
+                     return Task.FromResult<string?>(ClipboardText);
+                 }, token => CaptureFrame?.Invoke(id, token) ?? Task.FromResult<VideoFrame?>(new VideoFrame(2, 2, 8, 1, new byte[16])))
+-                { SessionCurrent = SessionCurrent });
++                { SessionCurrent = SessionCurrent, CapturePng = StillScreenshot });
+         }
+         public Task<bool> IsHumanInputBusyAsync(string identity, CancellationToken cancellation) => Task.FromResult(HumanBusy);
+         public async Task ReserveAsync(string identity, Action reserve, CancellationToken cancellation)
+diff --git a/tools/usb_touch_bridge.py b/tools/usb_touch_bridge.py
+--- a/tools/usb_touch_bridge.py
++++ b/tools/usb_touch_bridge.py
+@@ -22,6 +22,7 @@
+ from __future__ import annotations
+ 
+ import argparse
++from ondemand_screenshot import screenshot_result
+ import asyncio
+ import contextlib
+ from concurrent.futures import ThreadPoolExecutor, wait
+@@ -435,7 +436,7 @@
+     return None
+ 
+ PROTOCOL_VERSION = 2
+-CAPABILITIES = ['iphoneMirror.usb_touch.v2', 'iphoneMirror.usb_keyboard.v1', 'iphoneMirror.clipboard.rpc.v1']
++CAPABILITIES = ['iphoneMirror.usb_touch.v2', 'iphoneMirror.usb_keyboard.v1', 'iphoneMirror.clipboard.rpc.v1', 'iphoneMirror.screenshot.rpc.v1']
+ MAX_SLOTS = 5
+ MAX_FRAME_SIZE = 4 * 1024 * 1024
+ MESSAGE_SCHEMA = 'iphoneMirror.touch.v2'
+@@ -3840,6 +3841,15 @@
+         keyboard_paste_tasks: set[asyncio.Task[None]] = set()
+         automation_tasks: dict[str, asyncio.Task[None]] = {}
+ 
++        async def automation_screenshot(frame: dict) -> None:
++            generation = self._generation
++            try:
++                await screenshot_result(self.rsd, frame, generation,
++                    lambda: generation == self._generation and not self._recovering,
++                    self.ipc.emit)
++            finally:
++                automation_tasks.pop(frame['requestId'], None)
++
+         async def automation_clipboard(frame: dict) -> None:
+             request_id = frame['requestId']
+             generation = self._generation
+@@ -3924,22 +3934,23 @@
+                     for attempt in range(2):
+                         attempted_hid = self.hid
+                         try:
+-                            if frame.get('kind') == 'cancel_clipboard':
++                            if frame.get('kind') in {'cancel_clipboard', 'cancel_screenshot'}:
+                                 task = automation_tasks.get(frame.get('requestId'))
+                                 if task is not None:
+                                     task.cancel()
+                                     await asyncio.gather(task, return_exceptions=True)
+                             elif frame.get('requestId') is not None and frame.get('kind') in {
+-                                    PASTE_TEXT_MESSAGE_KIND, READ_CLIPBOARD_MESSAGE_KIND, 'write_clipboard'}:
++                                    PASTE_TEXT_MESSAGE_KIND, READ_CLIPBOARD_MESSAGE_KIND, 'write_clipboard', 'screenshot'}:
+                                 request_id = frame.get('requestId')
+                                 if (not isinstance(request_id, str) or not 1 <= len(request_id) <= 64 or
+                                         not request_id.isascii() or not request_id.isalnum() or
+                                         request_id in automation_tasks or len(automation_tasks) >= 16):
+                                     raise ValueError('invalid automation request')
+-                                task = asyncio.create_task(automation_clipboard(frame))
++                                task = asyncio.create_task(automation_screenshot(frame) if frame.get('kind') == 'screenshot'
++                                                           else automation_clipboard(frame))
+                                 automation_tasks[request_id] = task
+                                 paste_tasks.add(task)
+-                                if frame.get('kind') != READ_CLIPBOARD_MESSAGE_KIND:
++                                if frame.get('kind') not in {READ_CLIPBOARD_MESSAGE_KIND, 'screenshot'}:
+                                     keyboard_paste_tasks.add(task)
+                                 task.add_done_callback(track_paste_task)
+                             elif frame.get('kind') == KEYBOARD_MESSAGE_KIND:

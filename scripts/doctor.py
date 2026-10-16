@@ -53,7 +53,7 @@ async def diagnose():
                 report["ready"] = any(d["screenshot"] for d in report["devices"])
                 report["controlReady"] = any(d["screenshot"] and d["controlAvailable"] for d in report["devices"])
                 if not report["ready"]:
-                    report["action"] = "Connect/unlock/trust a device and start capture in iPhoneMirror; rerun doctor."
+                    report["action"] = "Connect/unlock/trust a device and call start_iphonemirror for on-demand screenshots; rerun doctor."
     except Exception:
         # Server logs may show a local diagnostic, but JSON never includes arbitrary exceptions/secrets.
         report["failedStage"] = stage

@@ -3,6 +3,7 @@ param(
     [string]$Python,
     [string]$MirrorPath,
     [string]$Proxy,
+    [ValidateSet('on_demand', 'continuous')][string]$CaptureMode = 'continuous',
     [switch]$SkipCodex,
     [switch]$SkipDoctor,
     [switch]$OpenDriverManager,
@@ -11,7 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT') { throw 'Bootstrap requires Windows 10/11 x64.' }
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$setupArgs = @{ EnableAutomationApi = $true }
+$setupArgs = @{ EnableAutomationApi = $true; CaptureMode = $CaptureMode }
 if ($SkipCodex) { $setupArgs.SkipCodex = $true }
 $setupArgs.SkipDoctor = $true
 if ($OpenDriverManager) { throw 'GUI driver setup was removed. Run bootstrap without -OpenDriverManager for headless setup.' }
@@ -59,7 +60,8 @@ if (-not $SkipDrivers) {
     if ($LASTEXITCODE -ne 0) { throw 'Driver setup requires action. Read the JSON actionRequired above, complete it and rerun; never retry an unknown transaction.' }
 }
 if (-not $SkipDoctor) {
-    & (Join-Path $repoRoot '.venv/Scripts/python.exe') "$PSScriptRoot/start-runtime.py"
+    Write-Host "Preparing capture mode: $CaptureMode (use -CaptureMode on_demand with a patched runtime for still images)."
+    & (Join-Path $repoRoot '.venv/Scripts/python.exe') "$PSScriptRoot/start-runtime.py" --mode $CaptureMode
     if ($LASTEXITCODE -ne 0) { throw 'Background preparation requires action; see the MCP response.' }
     & (Join-Path $repoRoot '.venv/Scripts/python.exe') "$PSScriptRoot/doctor.py"
     if ($LASTEXITCODE -ne 0) { throw 'Device verification failed; see docs/SETUP.md.' }

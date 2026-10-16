@@ -113,7 +113,10 @@ class RuntimeClient:
 
         return Process()
 
-    async def start(self, device_id=None, enable_control=True):
+    async def start(self, device_id=None, enable_control=True, capture_mode="on_demand"):
+        if capture_mode not in {"on_demand", "continuous"}:
+            raise ValueError("capture_mode must be on_demand or continuous")
+        continuous_capture = capture_mode == "continuous"
         async with self.management_lock:
             # Validate support before launching: old apps ignore unknown CLI flags and show the main UI.
             try:
@@ -152,6 +155,8 @@ class RuntimeClient:
                 await asyncio.sleep(.3)
             else:
                 raise RuntimeError("BACKGROUND_START_FAILED: check the runtime version, same-user session and API port")
+            if not continuous_capture and status.get("onDemandCaptureVersion") != 1:
+                raise RuntimeError("RUNTIME_UPGRADE_REQUIRED: this runtime needs the on-demand screenshot patch; capture_mode=continuous explicitly selects continuous video capture")
             devices = []
             for _ in range(20):
                 devices = (await self.request("GET", "devices"))["devices"]
@@ -166,6 +171,11 @@ class RuntimeClient:
                 device_id = online[0]["id"]
             elif not any(d["id"] == device_id for d in devices):
                 raise RuntimeError("DEVICE_NOT_FOUND: select device_id from list_devices")
-            prepared = await self.request("POST", self.path(device_id, "/prepare"), {"enableControl": enable_control}, timeout=65)
-            ready = prepared.get("capturing", False) and (not enable_control or prepared.get("controlAvailable", False))
-            return {"app": await self.app_status(), "devicePrepared": ready, "device_id": device_id, "device": prepared}
+            options = {"enableControl": enable_control}
+            if not continuous_capture or status.get("onDemandCaptureVersion") == 1:
+                options["continuousCapture"] = continuous_capture
+            prepared = await self.request("POST", self.path(device_id, "/prepare"), options, timeout=65)
+            observation_ready = prepared.get("capturing", False) if continuous_capture else prepared.get("screenshotAvailable", False)
+            ready = observation_ready and (not enable_control or prepared.get("controlAvailable", False))
+            return {"app": await self.app_status(), "devicePrepared": ready, "device_id": device_id,
+                    "capture_mode": capture_mode, "device": prepared}

@@ -26,6 +26,8 @@ When asked to install/configure this project, execute the steps; do not just des
    registers `iphone-mcp` in Codex, exports a credential-free client JSON, and runs diagnosis.
    Without Codex use bootstrap `-SkipCodex` and import artifacts/mcp-config.json in the chosen MCP client.
    For an already configured app, `scripts/setup.ps1 -EnableAutomationApi` avoids downloading.
+   Bootstrap/setup default to explicit continuous capture for the published runtime.
+   For a patched app use -CaptureMode on_demand; see docs/CAPTURE_MODES.md.
 4. Resolve failed checks, then rerun `.venv/Scripts/python.exe scripts/doctor.py`.
    Exit 0 means a real screenshot succeeded through stdio MCP and API. Check `controlReady`
    and each device's `ocr` separately; observation readiness does not imply input readiness.
@@ -38,6 +40,9 @@ USB connection, unlocking, Trust This Computer, pairing and on-phone permission 
 may require the human. Continue all independent configuration before asking for these.
 Use start_iphonemirror for hidden capture/control preparation; specify device_id when multiple
 devices are online. Read devicePrepared/actionRequired rather than assuming readiness.
+Follow the user's capture_mode choice: on_demand for individual USB screenshots (tool default,
+requires the supplemental runtime patch), continuous for a video frame cache. Release leases
+before switching and close a preview before on_demand; do not silently switch modes on error.
 Call open_independent_window only when a visible preview is requested; release the lease first.
 Never weaken Codex permission settings just to make a diagnostic pass.
 

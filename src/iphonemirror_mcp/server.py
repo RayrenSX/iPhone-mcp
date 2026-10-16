@@ -47,7 +47,16 @@ async def lifespan(server: FastMCP) -> AsyncIterator[RuntimeClient]:
 
 
 mcp = LeanFastMCP("iPhoneMirror", lifespan=lifespan, log_level="WARNING", instructions="""
-start_iphonemirror starts the hidden app/API, capture and reverse-control preparation.
+start_iphonemirror starts the hidden app/API and prepares direct control plus observation.
+Choose capture_mode=on_demand for individual screenshots without continuous video, or
+capture_mode=continuous for a live video frame cache. on_demand is the default.
+Follow the user's mode preference. Otherwise choose on_demand for occasional
+before/after observations, continuous for frequent observations or animation tracking.
+On-demand avoids video streaming work but adds a device request per screenshot;
+continuous keeps frames available but consumes resources between observations.
+Explain the tradeoff if the user asks for help choosing. Release leases before
+switching modes, close any preview before on_demand, then verify a fresh snapshot.
+enable_control defaults to true.
 Use its device_id; list_devices only to select a device. Open a preview only when
 requested, using open_independent_window after releasing control.
 snapshot includes fresh status, capabilities and geometry; reuse them instead of
@@ -89,15 +98,25 @@ def client(ctx: Context) -> RuntimeClient:
 
 
 @mcp.tool(annotations=MANAGE)
-async def start_iphonemirror(ctx: Context, device_id: str | None = None, enable_control: bool = True) -> dict:
-    """Start iPhoneMirror in the background, enable API/capture and prepare reverse control.
+async def start_iphonemirror(ctx: Context, device_id: str | None = None, enable_control: bool = True,
+                           capture_mode: Literal["on_demand", "continuous"] = "on_demand") -> dict:
+    """Prepare direct control and choose how the phone screen is observed.
 
     Defaults to the sole online device; multiple devices require an explicit device_id.
     Does not send phone input or open a preview. Missing trust, driver, pairing or
     Developer Mode requires human action. A missing runtime starts a setup job;
     poll get_setup_status, then call this tool again. Drivers use prepare_iphone_environment.
+    capture_mode=on_demand requests individual screenshots over the USB control
+    transport and keeps capturing=false: avoids ongoing video work, but each shot
+    adds a device round trip. Requires the patched runtime, USB and Developer Mode/DDI.
+    capture_mode=continuous maintains a video frame cache: useful for frequent
+    observations or animation tracking, but consumes resources between observations.
+    Both modes keep control enabled and windows hidden by default. Continuous
+    observation alone does not require input setup; input may need Developer Mode/DDI.
+    Follow the user's choice; otherwise prefer on_demand for occasional screenshots.
+    Release leases before switching and close any preview before on_demand.
     """
-    return await client(ctx).start(device_id, enable_control)
+    return await client(ctx).start(device_id, enable_control, capture_mode)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,

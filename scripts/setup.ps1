@@ -2,6 +2,7 @@
 param(
     [string]$Python,
     [string]$MirrorPath,
+    [ValidateSet('on_demand', 'continuous')][string]$CaptureMode = 'continuous',
     [switch]$EnableAutomationApi,
     [switch]$SkipCodex,
     [switch]$SkipDoctor
@@ -69,7 +70,8 @@ if (-not $SkipCodex) {
 Write-Host 'MCP configured. Generated artifacts/mcp-config.json for other clients. Open a new Codex session.'
 if (-not $SkipDoctor) {
     if ($managedRuntime) {
-        & $venvPython "$PSScriptRoot/start-runtime.py"
+        Write-Host "Preparing capture mode: $CaptureMode"
+        & $venvPython "$PSScriptRoot/start-runtime.py" --mode $CaptureMode
         if ($LASTEXITCODE -ne 0) { throw 'Background runtime start failed; see the MCP response above.' }
     }
     & $venvPython "$PSScriptRoot/doctor.py"
